@@ -57,6 +57,7 @@ struct Snaffle {
     pub pos: Vector2,
     pub velocity: Vector2,
     friction: f32,
+    radius: f32,
 }
 
 impl Snaffle {
@@ -66,15 +67,18 @@ impl Snaffle {
             pos: Vector2::new(x as f32, y as f32),
             velocity: Vector2::new(vx as f32, vy as f32),
             friction: 0.75,
+            radius: 150.0,
         }
     }
 
-    pub fn destination(&self) -> (i32, i32) {}
+    pub fn destination(&self) -> Vector2 {
+        self.pos.add(self.velocity)
+    }
 
     pub fn distance_from_goal(&self, team_id: i32) -> f32 {
         let goal_center: Vector2 = if team_id == 0 {
-            Vector2::new(GOAL1_CENTER[0].0, GOAL1_CENTER[0].1)
-        } else { Vector2::new(GOAL0_CENTER[0].0, GOAL0_CENTER[0].1) };
+            Vector2::new(GOAL1_CENTER.0 as f32, GOAL1_CENTER.1 as f32)
+        } else { Vector2::new(GOAL0_CENTER.0 as f32, GOAL0_CENTER.1 as f32) };
         goal_center.distance(self.pos)
     }
 }
@@ -86,6 +90,7 @@ struct Bludger {
     pub velocity: Vector2,
     last_wizard_hit: i32,
     friction: f32,
+    radius: f32,
 }
 
 impl Bludger {
@@ -96,11 +101,13 @@ impl Bludger {
             velocity: Vector2::new(vx as f32, vy as f32),
             last_wizard_hit,
             friction: 0.9,
+            radius: 200.0,
         }
     }
 
-    pub fn destination(&self) -> (i32, i32) {}
-
+    pub fn destination(&self) -> Vector2 {
+        self.pos.add(self.velocity)
+    }
     pub fn last_wizard_hit(&self, wizards: &Vec<Wizard>) -> Option<Wizard> {
         match self.last_wizard_hit {
             -1 => None,
@@ -126,9 +133,19 @@ impl Bludger {
         self.velocity.x = vy as f32;
     }
 
-    pub fn collides(&self, wizards: &Vec<Wizard>) -> Option<Wizard> {}
+    pub fn collides(&self, wizard: &Wizard) -> bool {
+        wizard.pos.distance(self.pos) < wizard.radius + self.radius
+    }
 
-    pub fn closest_target(&self, wizards: &Vec<Wizard>) -> Wizard {}
+    pub fn closest_target(&self, wizards: &Vec<Wizard>) -> Wizard {
+        wizards.iter().fold(wizards[0].clone(), |mut result, wizard| {
+            if wizard.pos.distance(self.pos) < result.pos.distance(self.pos)
+                && wizard.last_hit == false {
+                result = wizard.clone();
+            }
+            result
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -141,6 +158,7 @@ struct Wizard {
     pub last_hit: bool,
     pub team_id: i32,
     friction: f32,
+    radius: f32,
 }
 
 impl Wizard {
@@ -157,24 +175,27 @@ impl Wizard {
             last_hit,
             team_id,
             friction: 0.75,
+            radius: 400.0,
         }
     }
 
-    pub fn destination(&self) -> (i32, i32) {}
+    pub fn destination(&self) -> Vector2 {
+        self.pos.add(self.velocity)
+    }
 
     pub fn move_action(&self, snaffles: &Vec<Snaffle>) -> String {
         let snaffle = self.find_most_desirable_snaffle(snaffles);
         match snaffle {
-            Some(s) => {
-                let (x_to, y_to) = s.destination();
-                format!("{} {} {} {}", "MOVE", x_to, y_to, self.thrust_to_destination(x_to, y_to))
+            Some(snaf) => {
+                let dest = snaf.destination();
+                format!("{} {} {} {}", "MOVE", dest.x, dest.y, self.thrust_to_destination(dest))
             }
             None => String::from("")
         }
     }
     pub fn throw_action(&self) -> String {
-        let destination = self.throw_destination();
-        format!("{} {} {} {}", "THROW", x_to, y_to, self.power_to_destination(destination))
+        let dest = self.throw_destination();
+        format!("{} {} {} {}", "THROW", dest.x, dest.y, self.power_to_destination(dest))
     }
 
     pub fn should_magic(&self, magic: i32) -> bool { magic > 20 }
@@ -184,9 +205,10 @@ impl Wizard {
         let magic_use = 15;
         *magic -= magic_use;
         let target = self.find_most_desirable_magic_target(wizards, snaffles);
+        let dest = self.throw_destination();
         match target {
-            Target::Wizard(w) => format!("{} {} {} {} {}", "WINGARDIUM", w.id, x_to, y_to, magic_use * 15),
-            Target::Snaffle(s) => format!("{} {} {} {} {}", "WINGARDIUM", s.id, x_to, y_to, magic_use * 15)
+            Target::Wizard(w) => format!("{} {} {} {} {}", "WINGARDIUM", w.id, dest.x, dest.y, magic_use * 15),
+            Target::Snaffle(s) => format!("{} {} {} {} {}", "WINGARDIUM", s.id, dest.x, dest.y, magic_use * 15)
         }
     }
 
@@ -205,8 +227,9 @@ impl Wizard {
 
     fn find_most_desirable_magic_target(&self, wizards: &Vec<Wizard>, snaffles: &mut Vec<Snaffle>) -> Target {
         snaffles.sort_by(|a, b|
-            a.distance_from_goal(self.team_id.clone())
-             .cmp(&b.distance_from_goal(self.team_id.clone())));
+            (a.distance_from_goal(self.team_id) as i32)
+                .cmp(&(b.distance_from_goal(self.team_id) as i32))
+        );
         match snaffles.first().cloned() {
             Some(s) => Target::Snaffle(s),
             None => Target::Wizard(wizards.first().cloned().unwrap())
@@ -216,17 +239,18 @@ impl Wizard {
     //ToDo don't use rand...
     fn throw_destination(&self) -> Vector2 {
         let mut rng = thread_rng();
-        if team_id == 0 {
+        if self.team_id == 0 {
             let x_to = GOAL1_BOUNDS[0].0;
             let y_to = rng.gen_range(GOAL1_BOUNDS[0].1, GOAL1_BOUNDS[1].1);
+            Vector2::new(x_to as f32, y_to as f32)
         } else {
             let x_to = GOAL0_BOUNDS[0].0;
             let y_to = rng.gen_range(GOAL0_BOUNDS[0].1, GOAL0_BOUNDS[1].1);
+            Vector2::new(x_to as f32, y_to as f32)
         }
-        Vector2::new(x_to, y_to)
     }
 
-    fn thrust_to_destination(&self, x_to: i32, y_to: i32) -> i32 {
+    fn thrust_to_destination(&self, destination: Vector2) -> i32 {
         50
     }
 
@@ -323,7 +347,10 @@ fn main() {
                                     .chain(opponent_wizards.iter().cloned())
                                     .collect();
         }
-        for wizard in my_wizards.iter() {
+        for wizard in my_wizards.iter_mut() {
+            for b in bludgers.clone() {
+                if b.collides(wizard) { wizard.last_hit = true }
+            }
             let action: String = if wizard.has_snaffle {
                 wizard.throw_action()
             } else {
