@@ -47,6 +47,10 @@ impl Vector2 {
         Vector2::new(self.x + v2.x, self.y + v2.y)
     }
 
+    pub fn mul_num(&self, num: f32) -> Vector2 {
+        Vector2::new(self.x * num, self.y * num)
+    }
+
     pub fn distance(&self, v2: Vector2) -> f32 {
         ((self.x - v2.x).powi(2) +
             (self.y - v2.y).powi(2)).sqrt()
@@ -74,7 +78,7 @@ impl Snaffle {
     }
 
     pub fn destination(&self) -> Vector2 {
-        self.pos.add(self.velocity)
+        self.pos.add(self.velocity.mul_num(self.friction))
     }
 
     pub fn distance_from_goal(&self, team_id: i32) -> f32 {
@@ -109,7 +113,7 @@ impl Bludger {
 
     #[allow(dead_code)]
     pub fn destination(&self) -> Vector2 {
-        self.pos.add(self.velocity)
+        self.pos.add(self.velocity.mul_num(self.friction))
     }
 
     #[allow(dead_code)]
@@ -188,46 +192,67 @@ impl Wizard {
         }
     }
 
-    #[allow(dead_code)]
-    pub fn destination(&self) -> Vector2 {
-        self.pos.add(self.velocity)
+    pub fn act(&mut self,
+               magic_to_use: &mut i32,
+               other_wizard: &Wizard,
+               opponents: &Vec<Wizard>,
+               snaffles: &Vec<Snaffle>,
+               _bludgers: &Vec<Bludger>,
+    ) {
+        let action: String = if self.has_snaffle {
+            self.throw_action()
+        } else {
+            if self.should_magic(snaffles, magic_to_use.clone()) {
+                self.magic_action(opponents, snaffles, magic_to_use)
+            } else {
+                self.move_action(other_wizard, opponents, snaffles)
+            }
+        };
+        println!("{}", action)
     }
 
-    pub fn move_action(&mut self, other_wizard: &mut Wizard, snaffles: &Vec<Snaffle>) -> String {
-        let snaffle = self.find_most_desirable_snaffle(other_wizard, snaffles);
+    #[allow(dead_code)]
+    fn destination(&self) -> Vector2 {
+        self.pos.add(self.velocity.mul_num(self.friction))
+    }
+
+    fn move_action(&mut self, other_wizard: &Wizard, opponents: &Vec<Wizard>, snaffles: &Vec<Snaffle>) -> String {
+        let snaffle = self.find_most_desirable_snaffle(other_wizard, opponents, snaffles);
         self.target_snaffle = snaffle;
         match self.target_snaffle {
             Some(s) => {
                 let dest = s.destination();
-                format!("{} {} {} {}", "MOVE", dest.x, dest.y, self.thrust_to_destination(dest))
+                format!("{} {} {} {}", "MOVE", dest.x as i32, dest.y as i32, self.thrust_to_destination(dest))
             }
             None => format!("{} {} {} {}", "MOVE", 0, 0, 0)
         }
     }
-    pub fn throw_action(&self) -> String {
+    fn throw_action(&self) -> String {
         let dest = self.throw_destination();
-        format!("{} {} {} {}", "THROW", dest.x, dest.y, self.power_to_destination(dest))
+        format!("{} {} {} {}", "THROW", dest.x as i32, dest.y as i32, self.power_to_destination(dest))
     }
 
-    pub fn should_magic(&self, snaffles: &Vec<Snaffle>, magic: i32) -> bool {
+    fn should_magic(&self, snaffles: &Vec<Snaffle>, magic: i32) -> bool {
         // if any snaffle is close to own goal (get it away from there! :D)
         magic > (0.3 * MAX_MAGIC as f32) as i32 ||
             snaffles.iter().any(|s| s.distance_from_goal(1 - self.team_id) <= (magic * MAGIC_MUL) as f32)
     }
 
-    pub fn magic_action(&self, wizards: &Vec<Wizard>, snaffles: &Vec<Snaffle>, magic: i32) -> String {
+    fn magic_action(&self, wizards: &Vec<Wizard>, snaffles: &Vec<Snaffle>, magic: &mut i32) -> String {
         let target = self.find_most_desirable_magic_target(wizards, snaffles);
         // Goal (Away for wizard targets)
         let dest = self.throw_destination();
+        let magic_to_use = *magic / 2;
+        *magic -= magic_to_use;
         match target {
-            Target::Wizard(w) => format!("{} {} {} {} {}", "WINGARDIUM", w.id, dest.x, dest.y, magic),
-            Target::Snaffle(s) => format!("{} {} {} {} {}", "WINGARDIUM", s.id, dest.x, dest.y, magic)
+            Target::Wizard(w) => format!("{} {} {} {} {}", "WINGARDIUM", w.id, dest.x as i32, dest.y as i32, magic_to_use),
+            Target::Snaffle(s) => format!("{} {} {} {} {}", "WINGARDIUM", s.id, dest.x as i32, dest.y as i32, magic_to_use)
         }
     }
 
     // If another wizard has target, ignore that target from snaffles list.
     // Select snaffle closest to opponent goal
-    pub fn find_most_desirable_snaffle(&self, other_wizard: &mut Wizard, snaffles: &Vec<Snaffle>) -> Option<Snaffle> {
+    fn find_most_desirable_snaffle(&self, other_wizard: &Wizard, _opponents: &Vec<Wizard>, snaffles: &Vec<Snaffle>) -> Option<Snaffle> {
         let mut snaffles = snaffles.clone();
 
         if other_wizard.target_snaffle.is_some() {
@@ -349,7 +374,7 @@ fn main() {
     let mut bludgers = vec![];
 
     loop {
-        let (_my_score, my_magic, _opponent_score, _opponent_magic, entities) = parse_loop_variables();
+        let (_my_score, mut my_magic, _opponent_score, _opponent_magic, entities) = parse_loop_variables();
         let mut snaffles = vec![];
         let mut my_wizards = vec![];
         let mut opponent_wizards = vec![];
@@ -379,21 +404,16 @@ fn main() {
                                      .collect();
         }
 
-        let mut magic_used = false;
-        for (index, wizard) in my_wizards.iter_mut().enumerate() {
-            for b in bludgers.clone() {
-                if b.collides(wizard) { wizard.last_hit = true }
-            }
-            let action: String = if wizard.has_snaffle {
-                wizard.throw_action()
-            } else {
-                if !magic_used && wizard.should_magic(&snaffles, my_magic) {
-                    magic_used = true;
-                    wizard.magic_action(&opponent_wizards, &snaffles, my_magic)
-                } else { wizard.move_action(&mut my_wizards[my_wizards.len() - (index + 1)].clone(), &snaffles) }
-            };
-            println!("{}", action)
+        let ref_magic: &mut i32 = &mut my_magic;
+
+        let mut wizard1 = my_wizards[0];
+        let mut wizard2 = my_wizards[1];
+        for b in bludgers.clone() {
+            if b.collides(&wizard1) { wizard1.last_hit = true }
+            if b.collides(&wizard2) { wizard2.last_hit = true }
         }
+        wizard1.act(ref_magic, &wizard2, &opponent_wizards, &snaffles, &bludgers);
+        wizard2.act(ref_magic, &wizard1, &opponent_wizards, &snaffles, &bludgers);
         game_started = true;
     }
 }
