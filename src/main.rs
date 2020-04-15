@@ -20,6 +20,7 @@ static MAX_THRUST: i32 = 150;
 static MAX_POWER: i32 = 500;
 static MAX_MAGIC: i32 = 100;
 static MAX_MAGIC_POWER: i32 = 1500;
+static MAGIC_MUL: i32 = 15;
 
 #[derive(Debug, Clone, Copy)]
 struct Vector2 {
@@ -198,17 +199,17 @@ impl Wizard {
         format!("{} {} {} {}", "THROW", dest.x, dest.y, self.power_to_destination(dest))
     }
 
-    pub fn should_magic(&self, magic: i32) -> bool { magic > 20 }
+    pub fn should_magic(&self, snaffles: &Vec<Snaffle>, magic: i32) -> bool {
+        // if any snaffle is possible to make a goal with given magic amount
+        snaffles.iter().any(|s| s.distance_from_goal(self.team_id) <= (magic * MAGIC_MUL) as f32)
+    }
 
-    pub fn magic_action(&self, wizards: &Vec<Wizard>, snaffles: &mut Vec<Snaffle>, magic: &mut i32) -> String {
-        //ToDo Define magic use somehow
-        let magic_use = 15;
-        *magic -= magic_use;
+    pub fn magic_action(&self, wizards: &Vec<Wizard>, snaffles: &mut Vec<Snaffle>, magic: i32) -> String {
         let target = self.find_most_desirable_magic_target(wizards, snaffles);
         let dest = self.throw_destination();
         match target {
-            Target::Wizard(w) => format!("{} {} {} {} {}", "WINGARDIUM", w.id, dest.x, dest.y, magic_use * 15),
-            Target::Snaffle(s) => format!("{} {} {} {} {}", "WINGARDIUM", s.id, dest.x, dest.y, magic_use * 15)
+            Target::Wizard(w) => format!("{} {} {} {} {}", "WINGARDIUM", w.id, dest.x, dest.y, magic * MAGIC_MUL),
+            Target::Snaffle(s) => format!("{} {} {} {} {}", "WINGARDIUM", s.id, dest.x, dest.y, magic * MAGIC_MUL)
         }
     }
 
@@ -251,11 +252,15 @@ impl Wizard {
     }
 
     fn thrust_to_destination(&self, destination: Vector2) -> i32 {
-        50
+        let dist = self.pos.distance(destination) as i32;
+        if dist > MAX_THRUST
+        { MAX_THRUST } else { dist }
     }
 
     fn power_to_destination(&self, destination: Vector2) -> i32 {
-        200
+        let dist = self.pos.distance(destination) as i32;
+        if dist > MAX_POWER
+        { MAX_POWER } else { dist }
     }
 }
 
@@ -318,7 +323,7 @@ fn main() {
 
     // game loop
     loop {
-        let (my_score, mut my_magic, opponent_score, opponent_magic, entities) = parse_loop_variables();
+        let (my_score, my_magic, opponent_score, opponent_magic, entities) = parse_loop_variables();
         let mut snaffles = vec![];
         let mut my_wizards = vec![];
         let mut opponent_wizards = vec![];
@@ -347,6 +352,8 @@ fn main() {
                                     .chain(opponent_wizards.iter().cloned())
                                     .collect();
         }
+
+        let mut magic_used = false;
         for wizard in my_wizards.iter_mut() {
             for b in bludgers.clone() {
                 if b.collides(wizard) { wizard.last_hit = true }
@@ -354,9 +361,9 @@ fn main() {
             let action: String = if wizard.has_snaffle {
                 wizard.throw_action()
             } else {
-                if wizard.should_magic(my_magic) {
-                    let ref_magic: &mut i32 = &mut my_magic;
-                    wizard.magic_action(&opponent_wizards, &mut snaffles, ref_magic)
+                if !magic_used && wizard.should_magic(&snaffles, my_magic) {
+                    magic_used = true;
+                    wizard.magic_action(&opponent_wizards, &mut snaffles, my_magic)
                 } else { wizard.move_action(&snaffles) }
             };
             // Write an action using println!("message...");
