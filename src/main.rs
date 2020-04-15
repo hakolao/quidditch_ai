@@ -213,7 +213,7 @@ impl Wizard {
     }
 
     pub fn find_most_desirable_snaffle(&self, snaffles: &Vec<Snaffle>) -> Option<Snaffle> {
-        let mut distance = 0.;
+        let mut distance = 100000.0;
         let mut result = None;
         for snaffle in snaffles.iter() {
             let new_distance = snaffle.pos.distance(self.pos);
