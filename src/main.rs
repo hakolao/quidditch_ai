@@ -8,6 +8,8 @@ macro_rules! parse_input {
 static BOUNDS: &'static [(i32, i32)] = &[(0, 0), (16001, 0), (0, 7501), (7501, 16001)];
 static POLE_RAD: i32 = 300;
 static SNAFFLE_RAD: i32 = 150;
+static GOAL0_CENTER: (i32, i32) = (0, 3750);
+static GOAL1_CENTER: (i32, i32) = (16000, 3750);
 static GOAL0_BOUNDS: &'static [(i32, i32)] =
     &[(0, 3750 - 2000 + POLE_RAD + SNAFFLE_RAD),
         (0, 3750 + 2000 - POLE_RAD - SNAFFLE_RAD)];
@@ -16,7 +18,8 @@ static GOAL1_BOUNDS: &'static [(i32, i32)] =
         (16000, 3750 + 2000 - POLE_RAD - SNAFFLE_RAD)];
 static MAX_THRUST: i32 = 150;
 static MAX_POWER: i32 = 500;
-static MAX_MAGIC: i32 = 1500;
+static MAX_MAGIC: i32 = 100;
+static MAX_MAGIC_POWER: i32 = 1500;
 
 
 struct Snaffle {
@@ -33,6 +36,18 @@ impl Snaffle {
     }
 
     pub fn destination(&self) -> (i32, i32) {}
+
+    pub fn distance_from_goal(&self, team_id: i32) -> i32 {
+        if team_id == 0 {
+            (((self.x - GOAL1_CENTER[0]) as f32).powi(2) +
+                ((self.y - GOAL1_CENTER[1]) as f32).powi(2))
+                .sqrt() as i32
+        } else {
+            (((self.x - GOAL0_CENTER[0]) as f32).powi(2) +
+                ((self.y - GOAL0_CENTER[1]) as f32).powi(2))
+                .sqrt() as i32
+        }
+    }
 }
 
 struct Bludger {
@@ -103,23 +118,54 @@ impl Wizard {
 
     pub fn destination(&self) -> (i32, i32) {}
 
-    pub fn move_action(&self, snaffle: &Snaffle) -> String {
-        let (x_to, y_to) = snaffle.destination();
-        format!("{} {} {} {}", "MOVE", x_to, y_to, self.thrust_to_destination(x_to, y_to));
+    pub fn move_action(&self, snaffles: &Vec<Snaffle>) -> String {
+        let snaffle = self.find_most_desirable_snaffle(snaffles);
+        match snaffle {
+            Some(s) => {
+                let (x_to, y_to) = snaffle.destination();
+                format!("{} {} {} {}", "MOVE", x_to, y_to, self.thrust_to_destination(x_to, y_to))
+            }
+            None => String::from("")
+        }
     }
     pub fn throw_action(&self) -> String {
-        let (x_to, y_to) =
-            format!("{} {} {} {}", "THROW", x_to, y_to, self.power_to_destination(x_to, y_to))
+        let (x_to, y_to) = self.throw_destination();
+        format!("{} {} {} {}", "THROW", x_to, y_to, self.power_to_destination(x_to, y_to))
     }
 
-    pub fn magic_action(&self, target: Target, magic: i32) -> String {
+    pub fn should_magic(&self, magic: i32) -> bool { magic > 20 }
+
+    pub fn magic_action(&self, wizards: &Vec<Wizard>, snaffles: &mut Vec<Snaffle>, &mut magic: i32, magic_use: i32) -> String {
+        magic -= magic_use;
+        let target = self.find_most_desirable_magic_target(wizards, snaffles);
         match target {
-            Target::Wizard(w) => format!("{} {} {} {} {}", "WINGARDIUM", w.id, x_to, y_to, magic),
-            Target::Snaffle(s) => format!("{} {} {} {} {}", "WINGARDIUM", s.id, x_to, y_to, magic)
+            Target::Wizard(w) => format!("{} {} {} {} {}", "WINGARDIUM", w.id, x_to, y_to, magic_use * 15),
+            Target::Snaffle(s) => format!("{} {} {} {} {}", "WINGARDIUM", s.id, x_to, y_to, magic_use * 15)
         }
     }
 
-    pub fn find_most_desirable_snaffle(&self, wizard: &Wizard, snaffles: &Vec<Snaffle>) -> Option<Snaffle> {}
+    pub fn find_most_desirable_snaffle(&self, snaffles: &Vec<Snaffle>) -> Option<Snaffle> {
+        let mut distance = 0.;
+        let mut result = None;
+        for snaffle in snaffles.iter() {
+            let new_distance = (((snaffle.x - self.x) as f32).powi(2) + ((snaffle.y - self.y) as f32).powi(2));
+            if new_distance < distance {
+                distance = new_distance.clone();
+                result = Some(snaffle.clone());
+            }
+        }
+        result.into()
+    }
+
+    fn find_most_desirable_magic_target(&self, wizards: &Vec<Wizard>, snaffles: &mut Vec<Snaffle>) -> Target {
+        snaffles.sort_by(|a, b|
+            a.distance_from_goal(self.team_id.clone())
+             .cmp(&b.distance_from_goal(self.team_id.clone())));
+        match snaffles.first().cloned() {
+            Some(s) => Target::Snaffle(s),
+            None => Target::Wizard(wizards.first().cloned().unwrap())
+        }
+    }
 
     //ToDo don't use rand...
     fn throw_destination(&self) -> (i32, i32) {
@@ -134,9 +180,13 @@ impl Wizard {
         (x_to, y_to)
     }
 
-    fn thrust_to_destination(&self, x_to: i32, y_to: i32) -> i32 {}
+    fn thrust_to_destination(&self, x_to: i32, y_to: i32) -> i32 {
+        50
+    }
 
-    fn power_to_destination(&self, x_to: i32, y_to: i32) -> i32 {}
+    fn power_to_destination(&self, x_to: i32, y_to: i32) -> i32 {
+        200
+    }
 }
 
 enum Target {
@@ -181,7 +231,7 @@ fn parse_entity_variables() -> (i32, String, i32, i32, i32, i32, bool) {
     let vx = parse_input!(inputs[4], i32); // velocity
     let vy = parse_input!(inputs[5], i32); // velocity
     // 1 if the wizard is holding a Snaffle, 0 otherwise. 1 if the Snaffle is being held, 0 otherwise. id of the last victim of the bludger.
-    let hasSniffle = parse_input!(inputs[6], i32);
+    let has_snaffle = parse_input!(inputs[6], i32);
     (entity_id, entity_type, x, y, vx, vy, has_snaffle as bool)
 }
 
@@ -232,14 +282,8 @@ fn main() {
                 wizard.throw_action()
             } else {
                 if wizard.should_magic(magic) {
-                    let target = wizard.find_most_desirable_magic_target(&snaffles, &opponent_wizards);
-                    wizard.magic_action(target, magic)
-                } else {
-                    match wizard.find_most_desirable_snaffle(wizard, &snaffles) {
-                        Some(snaffle) => wizard.move_action(snaffle),
-                        None => String::from("")
-                    }
-                }
+                    wizard.magic_action(&opponent_wizards, &snaffles, magic)
+                } else { wizard.move_action(&snaffles) }
             };
             // Write an action using println!("message...");
             // To debug: eprintln!("Debug message...");
