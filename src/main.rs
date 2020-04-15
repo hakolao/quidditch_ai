@@ -226,14 +226,15 @@ impl Wizard {
         result.into()
     }
 
-    fn find_most_desirable_magic_target(&self, wizards: &Vec<Wizard>, snaffles: &mut Vec<Snaffle>) -> Target {
+    fn find_most_desirable_magic_target(&self, opponents: &Vec<Wizard>, snaffles: &mut Vec<Snaffle>) -> Target {
         snaffles.sort_by(|a, b|
             (a.distance_from_goal(self.team_id) as i32)
                 .cmp(&(b.distance_from_goal(self.team_id) as i32))
         );
-        match snaffles.first().cloned() {
+        //Choose furthest from goal
+        match snaffles.last().cloned() {
             Some(s) => Target::Snaffle(s),
-            None => Target::Wizard(wizards.first().cloned().unwrap())
+            None => Target::Wizard(opponents.first().cloned().unwrap())
         }
     }
 
