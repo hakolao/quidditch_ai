@@ -5,6 +5,47 @@ macro_rules! parse_input {
     ($x:expr, $t:ident) => ($x.trim().parse::<$t>().unwrap())
 }
 
+// if 0 you need to score on the right of the map, if 1 you need to score on the left
+fn parse_team_id() -> i32 {
+    let mut input_line = String::new();
+    io::stdin().read_line(&mut input_line).unwrap();
+    let my_team_id = parse_input!(input_line, i32);
+    my_team_id
+}
+
+fn parse_loop_variables() -> (i32, i32, i32, i32, i32) {
+    let mut input_line = String::new();
+    io::stdin().read_line(&mut input_line).unwrap();
+    let inputs = input_line.split(" ").collect::<Vec<_>>();
+    let my_score = parse_input!(inputs[0], i32);
+    let my_magic = parse_input!(inputs[1], i32);
+    let mut input_line = String::new();
+    io::stdin().read_line(&mut input_line).unwrap();
+    let inputs = input_line.split(" ").collect::<Vec<_>>();
+    let opponent_score = parse_input!(inputs[0], i32);
+    let opponent_magic = parse_input!(inputs[1], i32);
+    let mut input_line = String::new();
+    io::stdin().read_line(&mut input_line).unwrap();
+    let entities = parse_input!(input_line, i32); // number of entities still in game
+    (my_score, my_magic, opponent_score, opponent_magic, entities)
+}
+
+
+fn parse_entity_variables() -> (i32, String, i32, i32, i32, i32, bool) {
+    let mut input_line = String::new();
+    io::stdin().read_line(&mut input_line).unwrap();
+    let inputs = input_line.split(" ").collect::<Vec<_>>();
+    let entity_id = parse_input!(inputs[0], i32); // entity identifier
+    let entity_type = inputs[1].trim().to_string(); // "WIZARD", "OPPONENT_WIZARD" or "SNAFFLE" or "BLUDGER"
+    let x = parse_input!(inputs[2], i32); // position
+    let y = parse_input!(inputs[3], i32); // position
+    let vx = parse_input!(inputs[4], i32); // velocity
+    let vy = parse_input!(inputs[5], i32); // velocity
+    // 1 if the wizard is holding a Snaffle, 0 otherwise. 1 if the Snaffle is being held, 0 otherwise. id of the last victim of the bludger.
+    let has_snaffle = parse_input!(inputs[6], i32);
+    (entity_id, entity_type, x, y, vx, vy, has_snaffle == 1)
+}
+
 // static BOUNDS: &'static [(i32, i32)] = &[(0, 0), (16001, 0), (0, 7501), (7501, 16001)];
 static POLE_RAD: i32 = 300;
 static SNAFFLE_RAD: i32 = 150;
@@ -392,54 +433,13 @@ impl State {
     }
 }
 
-// if 0 you need to score on the right of the map, if 1 you need to score on the left 
-fn parse_team_id() -> i32 {
-    let mut input_line = String::new();
-    io::stdin().read_line(&mut input_line).unwrap();
-    let my_team_id = parse_input!(input_line, i32);
-    my_team_id
-}
-
-fn parse_loop_variables() -> (i32, i32, i32, i32, i32) {
-    let mut input_line = String::new();
-    io::stdin().read_line(&mut input_line).unwrap();
-    let inputs = input_line.split(" ").collect::<Vec<_>>();
-    let my_score = parse_input!(inputs[0], i32);
-    let my_magic = parse_input!(inputs[1], i32);
-    let mut input_line = String::new();
-    io::stdin().read_line(&mut input_line).unwrap();
-    let inputs = input_line.split(" ").collect::<Vec<_>>();
-    let opponent_score = parse_input!(inputs[0], i32);
-    let opponent_magic = parse_input!(inputs[1], i32);
-    let mut input_line = String::new();
-    io::stdin().read_line(&mut input_line).unwrap();
-    let entities = parse_input!(input_line, i32); // number of entities still in game
-    (my_score, my_magic, opponent_score, opponent_magic, entities)
-}
-
-
-fn parse_entity_variables() -> (i32, String, i32, i32, i32, i32, bool) {
-    let mut input_line = String::new();
-    io::stdin().read_line(&mut input_line).unwrap();
-    let inputs = input_line.split(" ").collect::<Vec<_>>();
-    let entity_id = parse_input!(inputs[0], i32); // entity identifier
-    let entity_type = inputs[1].trim().to_string(); // "WIZARD", "OPPONENT_WIZARD" or "SNAFFLE" or "BLUDGER"
-    let x = parse_input!(inputs[2], i32); // position
-    let y = parse_input!(inputs[3], i32); // position
-    let vx = parse_input!(inputs[4], i32); // velocity
-    let vy = parse_input!(inputs[5], i32); // velocity
-    // 1 if the wizard is holding a Snaffle, 0 otherwise. 1 if the Snaffle is being held, 0 otherwise. id of the last victim of the bludger.
-    let has_snaffle = parse_input!(inputs[6], i32);
-    (entity_id, entity_type, x, y, vx, vy, has_snaffle == 1)
-}
-
 fn main() {
     let my_team_id = parse_team_id();
     let mut init = true;
     let mut state = State::new(my_team_id);
 
     loop {
-        state.update_state(!init);
+        state.update_state(init);
 
         let mut wizard1 = state.wizards[0];
         let mut wizard2 = state.wizards[1];
@@ -448,7 +448,7 @@ fn main() {
 
         wizard1.act(&mut state);
         wizard2.act(&mut state);
-        
+
         init = false;
     }
 }
