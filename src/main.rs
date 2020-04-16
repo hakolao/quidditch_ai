@@ -47,6 +47,8 @@ fn parse_entity_variables() -> (i32, String, i32, i32, i32, i32, bool) {
 }
 
 // static BOUNDS: &'static [(i32, i32)] = &[(0, 0), (16001, 0), (0, 7501), (7501, 16001)];
+static WIDTH: i32 = 16001;
+static HEIGHT: i32 = 7501;
 static POLE_RAD: i32 = 300;
 static SNAFFLE_RAD: i32 = 150;
 static GOAL0_CENTER: (i32, i32) = (0, 3750);
@@ -276,8 +278,11 @@ impl Wizard {
     }
 
     fn should_magic(&self, state: &State) -> bool {
-        // Strategy to target snaffles when opponents have a snaffle
-        state.magic > 10 && state.opponents.iter().any(|o| o.has_snaffle)
+        // Any free snaffle close to own goal
+        // Defense
+        state.magic > 20 && state.free_snaffles().iter().any(|s|
+            s.distance_from_goal(1 - self.team_id) < (WIDTH / 2) as f32
+        )
     }
 
     fn magic_action(&self, state: &mut State) -> String {
@@ -312,12 +317,12 @@ impl Wizard {
         if snaffles.len() == 0 {
             return None;
         }
-        // Choose farthest snaffle
+        // Choose closest snaffle to our goal
         snaffles.sort_by(|a, b|
-            (a.pos.distance(self.pos) as i32)
-                .cmp(&(b.pos.distance(self.pos) as i32))
+            (a.distance_from_goal(1 - self.team_id) as i32)
+                .cmp(&(b.distance_from_goal(1 - self.team_id) as i32))
         );
-        Some(Target::Snaffle(snaffles.last().cloned().unwrap()))
+        Some(Target::Snaffle(snaffles.first().cloned().unwrap()))
     }
 
     //ToDo don't use rand...
@@ -404,14 +409,15 @@ impl State {
 
     pub fn update_state(&mut self, init: bool) {
         let (_my_score, my_magic, _opponent_score, _opponent_magic, entities) = parse_loop_variables();
-
+        self.magic = my_magic;
+        let mut snaffles = vec![];
         if init {
             for _ in 0..entities as usize {
                 let (entity_id, entity_type, x, y, vx, vy, has_snaffle) = parse_entity_variables();
                 match &entity_type[..] {
                     "WIZARD" => self.wizards.push(Wizard::new(entity_id, x, y, vx, vy, has_snaffle, self.team_id)),
                     "OPPONENT_WIZARD" => self.opponents.push(Wizard::new(entity_id, x, y, vx, vy, has_snaffle, 1 - self.team_id)),
-                    "SNAFFLE" => self.snaffles.push(Snaffle::new(entity_id, x, y, vx, vy)),
+                    "SNAFFLE" => snaffles.push(Snaffle::new(entity_id, x, y, vx, vy)),
                     "BLUDGER" => self.bludgers.push(Bludger::new(entity_id, x, y, vx, vy, -1)),
                     _ => ()
                 }
@@ -422,14 +428,15 @@ impl State {
                 match &entity_type[..] {
                     "WIZARD" => self.wizards.iter_mut().find(|w| w.id == entity_id).unwrap().update(x, y, vx, vy, has_snaffle),
                     "OPPONENT_WIZARD" => self.opponents.iter_mut().find(|w| w.id == entity_id).unwrap().update(x, y, vx, vy, has_snaffle),
-                    "SNAFFLE" => self.snaffles.iter_mut().find(|s| s.id == entity_id).unwrap()
-                                     .update(x, y, vx, vy),
+                    // Snaffles may be removed from game so just replace with new vector
+                    "SNAFFLE" => snaffles.push(Snaffle::new(entity_id, x, y, vx, vy)),
                     "BLUDGER" => self.bludgers.iter_mut().find(|b| b.id == entity_id).unwrap()
                                      .update(x, y, vx, vy),
                     _ => ()
                 }
             }
         }
+        self.snaffles = snaffles;
     }
 }
 
