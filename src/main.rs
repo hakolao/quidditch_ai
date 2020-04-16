@@ -98,6 +98,30 @@ impl Vector2 {
         ((self.x - v2.x).powi(2) +
             (self.y - v2.y).powi(2)).sqrt()
     }
+
+    pub fn average(vectors: Vec<Vector2>) -> Vector2 {
+        let mut sum = Vector2::new(0., 0.);
+        for v in &vectors {
+            sum = sum.add(v.clone());
+        }
+        sum.div_num(vectors.len() as f32)
+    }
+
+    pub fn div_num(&self, num: f32) -> Vector2 {
+        let mut num = num.clone();
+        if num == 0. { num += 0.0001 }
+        Vector2::new(self.x / num, self.y / num)
+    }
+
+    pub fn div(&self, v2: Vector2) -> Vector2 {
+        let mut v2 = v2.clone();
+        if v2.x == 0. { v2.x += 0.0001 }
+        if v2.y == 0. { v2.y += 0.0001 }
+        Vector2::new(
+            self.x / v2.x,
+            self.y / v2.y,
+        )
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialOrd, PartialEq)]
@@ -303,7 +327,7 @@ impl Wizard {
 
     fn find_most_desirable_snaffle(&self, state: &State) -> Option<Snaffle> {
         let mut snaffles = state.free_snaffles();
-        // Choose closest snaffle
+        // Sort snaffles by closest
         snaffles.sort_by(|a, b|
             (a.pos.distance(self.pos) as i32)
                 .cmp(&(b.pos.distance(self.pos) as i32))
