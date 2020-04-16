@@ -323,8 +323,7 @@ impl State {
                     "OPPONENT_WIZARD" => self.opponents.iter_mut().find(|w| w.id == entity_id).unwrap().update(x, y, vx, vy, has_snaffle),
                     // Snaffles may be removed from game so just replace with new vector
                     "SNAFFLE" => snaffles.push(Snaffle::new(entity_id, x, y, vx, vy)),
-                    "BLUDGER" => self.bludgers.iter_mut().find(|b| b.id == entity_id).unwrap()
-                                     .update(x, y, vx, vy),
+                    "BLUDGER" => self.bludgers.iter_mut().find(|b| b.id == entity_id).unwrap().update(x, y, vx, vy),
                     _ => ()
                 }
             }
@@ -394,14 +393,13 @@ impl State {
 
     fn optimal_magic_target(&self) -> Option<Snaffle> {
         let mut snaffles = self.snaffles.clone();
-        //Snaffle closest to own goal farthest from opponents
         snaffles.sort_by(|a, b| {
-            let a_avg_op_dist: i32 = self.opponents.iter().map(|o| o.pos.distance(a.pos) as i32).sum::<i32>() / 2;
-            let b_avg_op_dist: i32 = self.opponents.iter().map(|o| o.pos.distance(b.pos) as i32).sum::<i32>() / 2;
-            (a_avg_op_dist - a.distance_from_goal(1 - self.team_id) as i32).cmp(
-                &(b_avg_op_dist - a.distance_from_goal(1 - self.team_id) as i32))
+            (a.distance_from_goal(self.team_id) as i32).cmp(
+                &(b.distance_from_goal(self.team_id) as i32))
         });
-        snaffles.first().cloned()
+        // last() for closest to own goal
+        // first() for closest to opponent goal
+        snaffles.last().cloned()
     }
 
     fn optimal_magic_destination(&self, _target: &Snaffle) -> Vector2 {
@@ -410,60 +408,66 @@ impl State {
     }
 
     fn set_most_optimal_targets(&mut self) {
-        let mut wizard1 = self.wizards[0].clone();
-        let mut wizard2 = self.wizards[1].clone();
-        self.update_wizard_target(&mut wizard1);
-        self.update_wizard_target(&mut wizard2);
+        let wizards = self.wizards.clone();
+        let mut new_wizards = vec![];
+        // Set targets to None if target was removed
+        for w in &wizards {
+            let mut wiz = w.clone();
+            self.validate_wizard_target(&mut wiz);
+            new_wizards.push(wiz);
+        }
+        let mut wizard1 = new_wizards[0];
+        let mut wizard2 = new_wizards[1];
+        wizard1.set_target(self.most_desirable_target(&wizard1, &wizard2));
+        wizard2.set_target(self.most_desirable_target(&wizard2, &wizard1));
         self.wizards[0] = wizard1;
         self.wizards[1] = wizard2;
     }
 
-    fn update_wizard_target(&mut self, wizard: &mut Wizard) {
-        match wizard.target_snaffle {
-            Some(snaffle) => {
-                if !self.snaffles.iter().any(|s| s.id == snaffle.id) {
-                    wizard.set_target(None);
-                    wizard.set_target(Some(self.most_desirable_target(wizard)))
-                }
-            }
-            None => wizard.set_target(Some(self.most_desirable_target(wizard)))
+    fn validate_wizard_target(&mut self, wizard: &mut Wizard) {
+        if wizard.target_snaffle.is_some() &&
+            self.snaffles.iter().all(|s| s.id != wizard.target_snaffle.unwrap().id) {
+            wizard.set_target(None);
         }
     }
 
-    fn most_desirable_target(&self, wizard: &Wizard) -> Snaffle {
+    fn most_desirable_target(&self, wizard: &Wizard, other_wizard: &Wizard) -> Option<Snaffle> {
+        let mut snaffles = self.snaffles.clone();
+        if snaffles.len() == 0 { return None; }
+        if snaffles.len() > 1 {
+            if other_wizard.target_snaffle.is_some() {
+                snaffles.remove(snaffles.iter().position(|s|
+                    s.id == other_wizard.target_snaffle.unwrap().id
+                ).unwrap());
+            }
+        }
         // Calculate desirability
-        let mut snaffle_desirabilities: Vec<(Snaffle, usize)> = self.snaffles.iter().map(|s| {
+        let mut snaffle_desirabilities: Vec<(Snaffle, i32)> = snaffles.iter().map(|s| {
             let mut desirability = 0;
             //Any opponent collides with snaffle
             if self.opponents.iter().any(|o| s.collides_with_wizard(o)) {
-                desirability -= 3;
+                desirability -= 10;
+            }
+            //Snaffle is close
+            if s.pos.distance(wizard.pos) < 3000. {
+                desirability += 10;
             }
             //All opponents further than wizard from snaffle
             if self.opponents.iter().all(|o| s.pos.distance(o.pos) > s.pos.distance(wizard.pos)) {
-                desirability += 7;
+                desirability += 15;
             }
             //Any opponents further than wizard from snaffle
             else if self.opponents.iter().any(|o| s.pos.distance(o.pos) > s.pos.distance(wizard.pos)) {
-                desirability += 3;
-            }
-            //Don't go to same targets, hopefully...
-            if self.other_wizard(wizard).target_snaffle.is_some() {
-                if self.other_wizard(wizard).target_snaffle.unwrap().id == s.id {
-                    desirability -= 5;
-                }
+                desirability += 5;
             }
             (s.clone(), desirability)
         }).collect();
-        snaffle_desirabilities.sort_by(|a, b| b.1.cmp(&a.1));
-        snaffle_desirabilities.first().unwrap().0
+        snaffle_desirabilities.sort_by(|a, b| a.1.cmp(&b.1));
+        Some(snaffle_desirabilities.last().unwrap().0)
     }
 
     fn should_magic(&self) -> bool {
         self.magic > MAX_MAGIC / 3
-    }
-
-    fn other_wizard(&self, wizard: &Wizard) -> Wizard {
-        self.wizards.iter().find(|w| w.id != wizard.id).cloned().unwrap()
     }
 
     fn free_opponents(&self) -> Vec<Wizard> {
