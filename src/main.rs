@@ -90,6 +90,11 @@ impl Vector2 {
         Vector2::new(self.x + v2.x, self.y + v2.y)
     }
 
+    #[allow(dead_code)]
+    pub fn sub(&self, v2: Vector2) -> Vector2 {
+        Vector2::new(self.x - v2.x, self.y - v2.y)
+    }
+
     pub fn mul_num(&self, num: f32) -> Vector2 {
         Vector2::new(self.x * num, self.y * num)
     }
@@ -99,6 +104,7 @@ impl Vector2 {
             (self.y - v2.y).powi(2)).sqrt()
     }
 
+    #[allow(dead_code)]
     pub fn average(vectors: Vec<Vector2>) -> Vector2 {
         let mut sum = Vector2::new(0., 0.);
         for v in &vectors {
@@ -107,12 +113,14 @@ impl Vector2 {
         sum.div_num(vectors.len() as f32)
     }
 
+    #[allow(dead_code)]
     pub fn div_num(&self, num: f32) -> Vector2 {
         let mut num = num.clone();
         if num == 0. { num += 0.0001 }
         Vector2::new(self.x / num, self.y / num)
     }
 
+    #[allow(dead_code)]
     pub fn div(&self, v2: Vector2) -> Vector2 {
         let mut v2 = v2.clone();
         if v2.x == 0. { v2.x += 0.0001 }
@@ -123,6 +131,7 @@ impl Vector2 {
         )
     }
 
+    #[allow(dead_code)]
     pub fn center_of_mass(&self, vecs: Vec<Vector2>) -> Vector2 {
         Vector2::new(
             vecs.iter().map(|v| v.x).sum::<f32>() / (vecs.len() as f32),
@@ -150,6 +159,7 @@ impl Snaffle {
         }
     }
 
+    #[allow(dead_code)]
     pub fn update(&mut self, x: i32, y: i32, vx: i32, vy: i32) {
         self.pos.x = x as f32;
         self.pos.y = y as f32;
@@ -169,6 +179,7 @@ impl Snaffle {
         goal_center.distance(self.pos)
     }
 
+    #[allow(dead_code)]
     pub fn collides_with_wizard(&self, wizard: &Wizard) -> bool {
         wizard.pos.distance(self.pos) < wizard.radius + self.radius
     }
@@ -228,6 +239,7 @@ impl Bludger {
         self.last_wizard_hit = wizard_id;
     }
 
+    #[allow(dead_code)]
     pub fn collides_with_wizard(&self, wizard: &Wizard) -> bool {
         wizard.pos.distance(self.pos) < wizard.radius + self.radius
     }
@@ -275,6 +287,13 @@ impl Wizard {
     #[allow(dead_code)]
     fn destination(&self) -> Vector2 {
         self.pos.add(self.velocity.mul_num(self.friction))
+    }
+
+    pub fn distance_from_goal(&self, team_id: i32) -> f32 {
+        let goal_center: Vector2 = if team_id == 0 {
+            Vector2::new(GOAL1_CENTER.0 as f32, GOAL1_CENTER.1 as f32)
+        } else { Vector2::new(GOAL0_CENTER.0 as f32, GOAL0_CENTER.1 as f32) };
+        goal_center.distance(self.pos)
     }
 }
 
@@ -332,26 +351,29 @@ impl State {
     }
 
     pub fn act_turn(&mut self) {
-        let mut magic_used = false;
+        let mut magic_to_use = self.magic;
         self.set_most_optimal_targets();
         for wizard in &self.wizards {
             if wizard.has_snaffle {
-                let dest = self.optimal_throw_destination();
+                let dest = self.optimal_throw_destination(wizard, &self.other_wizard(wizard.id));
                 self.throw_action(dest, self.power_to_destination(wizard, dest));
-            } else if !magic_used && self.should_magic() {
+            } else if magic_to_use > 10 && self.should_magic() {
                 let target = self.optimal_magic_target();
                 match target {
                     Some(t) => {
-                        let dest = self.optimal_magic_destination(&t);
-                        self.magic_action(t.id, dest, self.magic)
+                        let dest = self.optimal_magic_destination(&t, wizard, &self.other_wizard(wizard.id));
+                        let magic_power = self.magic_to_destination(t.destination(), dest, magic_to_use);
+                        self.magic_action(t.id, dest, magic_power);
+                        magic_to_use -= magic_power;
                     }
                     None => {
                         let target = self.opponents.first().unwrap().clone();
                         let dest = Vector2::new((WIDTH / 2) as f32, (HEIGHT / 2) as f32);
-                        self.magic_action(target.id, dest, self.magic)
+                        let magic_power = self.magic_to_destination(target.pos, dest, magic_to_use);
+                        self.magic_action(target.id, dest, magic_power);
+                        magic_to_use -= magic_power;
                     }
                 }
-                magic_used = true;
             } else {
                 match wizard.target_snaffle {
                     Some(snaffle) => self.move_action(snaffle.pos, self.thrust_to_destination(wizard, snaffle.pos)),
@@ -363,6 +385,10 @@ impl State {
                 }
             }
         }
+    }
+
+    fn other_wizard(&self, id: i32) -> Wizard {
+        self.wizards.iter().find(|w| w.id != id).cloned().unwrap()
     }
 
     fn move_action(&self, destination: Vector2, thrust: i32) {
@@ -377,8 +403,21 @@ impl State {
         println!("{} {} {} {} {}", "WINGARDIUM", target_id, destination.x as i32, destination.y as i32, magic_to_use)
     }
 
-    fn optimal_throw_destination(&self) -> Vector2 {
-        //ToDo Improve!!
+    fn optimal_throw_destination(&self, wizard: &Wizard, other_wizard: &Wizard) -> Vector2 {
+        // closer to goal?
+        if wizard.distance_from_goal(self.team_id) < other_wizard.distance_from_goal(self.team_id) {
+            self.random_pos_inside_goal()
+            //= else try to pass to closer wizard
+        } else {
+            if other_wizard.pos.distance(wizard.pos) > 2000.0 {
+                self.random_pos_inside_goal()
+            } else {
+                other_wizard.destination()
+            }
+        }
+    }
+
+    fn random_pos_inside_goal(&self) -> Vector2 {
         let mut rng = thread_rng();
         if self.team_id == 0 {
             let x_to = GOAL1_BOUNDS[0].0;
@@ -402,9 +441,39 @@ impl State {
         snaffles.last().cloned()
     }
 
-    fn optimal_magic_destination(&self, _target: &Snaffle) -> Vector2 {
+    fn optimal_magic_destination(&self, target: &Snaffle, wizard: &Wizard, other_wizard: &Wizard) -> Vector2 {
         //ToDo Improve!!
-        self.optimal_throw_destination()
+        let target_goal_dist = target.distance_from_goal(self.team_id);
+        let other_wiz_goal_dist = other_wizard.distance_from_goal(self.team_id);
+        let wiz_goal_dist = wizard.distance_from_goal(self.team_id);
+
+        // Shoot it down or up if close!
+        if target.distance_from_goal(1 - self.team_id) < 2000. {
+            if target.pos.y < (HEIGHT / 2) as f32 {
+                return Vector2::new(target.pos.x, 0.);
+            }
+            return Vector2::new(target.pos.x, HEIGHT as f32);
+        }
+        //= target is closer to goal than both wizards, shoot at goal
+        if target_goal_dist < other_wiz_goal_dist &&
+            target_goal_dist < wiz_goal_dist {
+            self.random_pos_inside_goal()
+            //= else try to pass to closer wizard
+        } else {
+            if other_wizard.pos.distance(target.pos) > wizard.pos.distance(target.pos) {
+                if wizard.destination().distance(target.pos) < MAX_POWER as f32 {
+                    self.random_pos_inside_goal()
+                } else {
+                    wizard.destination()
+                }
+            } else {
+                if other_wizard.destination().distance(target.pos) < MAX_POWER as f32 {
+                    self.random_pos_inside_goal()
+                } else {
+                    other_wizard.destination()
+                }
+            }
+        }
     }
 
     fn set_most_optimal_targets(&mut self) {
@@ -433,6 +502,8 @@ impl State {
 
     fn most_desirable_target(&self, wizard: &Wizard, other_wizard: &Wizard) -> Option<Snaffle> {
         let mut snaffles = self.snaffles.clone();
+        let opponents = if wizard.team_id == self.team_id
+        { self.opponents.clone() } else { self.wizards.clone() };
         if snaffles.len() == 0 { return None; }
         if snaffles.len() > 1 {
             if other_wizard.target_snaffle.is_some() {
@@ -445,20 +516,24 @@ impl State {
         let mut snaffle_desirabilities: Vec<(Snaffle, i32)> = snaffles.iter().map(|s| {
             let mut desirability = 0;
             //Any opponent collides with snaffle
-            if self.opponents.iter().any(|o| s.collides_with_wizard(o)) {
-                desirability -= 10;
+            if opponents.iter().any(|o| s.collides_with_wizard(o)) {
+                desirability += 10;
+            }
+            //Snaffle is close to own goal
+            if s.distance_from_goal(1 - wizard.team_id) < 3000. {
+                desirability += 10;
             }
             //Snaffle is close
             if s.pos.distance(wizard.pos) < 3000. {
-                desirability += 10;
+                desirability += 15;
             }
             //All opponents further than wizard from snaffle
-            if self.opponents.iter().all(|o| s.pos.distance(o.pos) > s.pos.distance(wizard.pos)) {
+            if opponents.iter().all(|o| s.pos.distance(o.pos) > s.pos.distance(wizard.pos)) {
                 desirability += 15;
             }
             //Any opponents further than wizard from snaffle
-            else if self.opponents.iter().any(|o| s.pos.distance(o.pos) > s.pos.distance(wizard.pos)) {
-                desirability += 5;
+            else if opponents.iter().any(|o| s.pos.distance(o.pos) > s.pos.distance(wizard.pos)) {
+                desirability -= 5;
             }
             (s.clone(), desirability)
         }).collect();
@@ -467,43 +542,38 @@ impl State {
     }
 
     fn should_magic(&self) -> bool {
-        self.magic > MAX_MAGIC / 3
+        self.magic > MAX_MAGIC / 3 ||
+            (self.snaffles.iter().any(|s| s.distance_from_goal(1 - self.team_id) < 2000.))
     }
 
-    fn free_opponents(&self) -> Vec<Wizard> {
-        self.opponents.iter().filter(|o| o.has_snaffle == false).cloned().collect()
-    }
-
-    fn taken_opponents(&self) -> Vec<Wizard> {
-        self.opponents.iter().filter(|o| o.has_snaffle == true).cloned().collect()
-    }
-
-    fn taken_snaffles(&self) -> Vec<Snaffle> {
-        let taken_opponents = self.taken_opponents();
-        if taken_opponents.len() > 0 {
-            return self.snaffles.iter().filter(|s|
-                taken_opponents.iter().any(|o| s.collides_with_wizard(o))
-            ).cloned().collect();
-        }
-        vec![]
-    }
-
-    fn free_snaffles(&self) -> Vec<Snaffle> {
-        let taken_snaffles = self.taken_snaffles();
-        self.snaffles.iter().filter(|&s1|
-            !taken_snaffles.iter().any(|s2| s2 == s1)).cloned().collect()
+    #[allow(dead_code)]
+    fn untargeted_snaffles(&self) -> Vec<Snaffle> {
+        self.snaffles.iter().filter(|&snaffle| {
+            self.wizards.iter().all(|w| {
+                match w.target_snaffle {
+                    Some(s) => s.id != snaffle.id,
+                    None => true
+                }
+            })
+        }).cloned().collect()
     }
 
     fn thrust_to_destination(&self, wizard: &Wizard, destination: Vector2) -> i32 {
-        let dist = wizard.pos.distance(destination) as i32;
+        let dist = wizard.destination().distance(destination) as i32;
         if dist > MAX_THRUST
         { MAX_THRUST } else { dist }
     }
 
     fn power_to_destination(&self, wizard: &Wizard, destination: Vector2) -> i32 {
-        let dist = wizard.pos.distance(destination) as i32;
+        let dist = wizard.destination().distance(destination) as i32;
         if dist > MAX_POWER
         { MAX_POWER } else { dist }
+    }
+
+    fn magic_to_destination(&self, target_pos: Vector2, destination: Vector2, magic_to_use: i32) -> i32 {
+        let dist = target_pos.distance(destination) as i32;
+        if dist > magic_to_use * MAGIC_MUL
+        { magic_to_use } else { dist / MAGIC_MUL }
     }
 }
 
