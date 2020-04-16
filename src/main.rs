@@ -77,6 +77,14 @@ impl Snaffle {
         }
     }
 
+    pub fn update(&mut self, x: i32, y: i32, vx: i32, vy: i32) {
+        self.pos.x = x as f32;
+        self.pos.y = y as f32;
+        self.velocity.x = vx as f32;
+        self.velocity.x = vy as f32;
+        //ToDo Set last wizard hit or something...
+    }
+
     pub fn destination(&self) -> Vector2 {
         self.pos.add(self.velocity.mul_num(self.friction))
     }
@@ -115,6 +123,13 @@ impl Bludger {
         }
     }
 
+    pub fn update(&mut self, x: i32, y: i32, vx: i32, vy: i32) {
+        self.pos.x = x as f32;
+        self.pos.y = y as f32;
+        self.velocity.x = vx as f32;
+        self.velocity.x = vy as f32;
+    }
+
     #[allow(dead_code)]
     pub fn destination(&self) -> Vector2 {
         self.pos.add(self.velocity.mul_num(self.friction))
@@ -140,26 +155,8 @@ impl Bludger {
         self.last_wizard_hit = wizard_id;
     }
 
-    pub fn set_coords_and_velocity(&mut self, x: i32, y: i32, vx: i32, vy: i32) {
-        self.pos.x = x as f32;
-        self.pos.y = y as f32;
-        self.velocity.x = vx as f32;
-        self.velocity.x = vy as f32;
-    }
-
     pub fn collides_with_wizard(&self, wizard: &Wizard) -> bool {
         wizard.pos.distance(self.pos) < wizard.radius + self.radius
-    }
-
-    #[allow(dead_code)]
-    pub fn closest_target(&self, wizards: &Vec<Wizard>) -> Wizard {
-        wizards.iter().fold(wizards[0].clone(), |mut result, wizard| {
-            if wizard.pos.distance(self.pos) < result.pos.distance(self.pos)
-                && wizard.last_hit == false {
-                result = wizard.clone();
-            }
-            result
-        })
     }
 }
 
@@ -169,10 +166,9 @@ struct Wizard {
     pub pos: Vector2,
     pub velocity: Vector2,
     pub has_snaffle: bool,
-    pub is_opponent: bool,
-    pub last_hit: bool,
-    pub team_id: i32,
     pub target_snaffle: Option<Snaffle>,
+    pub should_magic: bool,
+    team_id: i32,
     friction: f32,
     radius: f32,
 }
@@ -180,39 +176,43 @@ struct Wizard {
 impl Wizard {
     pub fn new(
         id: i32, x: i32, y: i32, vx: i32, vy: i32,
-        has_sniffle: bool, is_opponent: bool, last_hit: bool, team_id: i32,
+        has_snaffle: bool, team_id: i32,
     ) -> Wizard {
         Wizard {
             id,
             pos: Vector2::new(x as f32, y as f32),
             velocity: Vector2::new(vx as f32, vy as f32),
-            has_snaffle: has_sniffle,
-            is_opponent,
-            last_hit,
-            team_id,
+            has_snaffle,
             target_snaffle: None,
+            should_magic: false,
+            team_id,
             friction: 0.75,
             radius: 400.0,
         }
     }
 
-    pub fn act(&mut self,
-               magic_to_use: &mut i32,
-               other_wizard: &Wizard,
-               opponents: &Vec<Wizard>,
-               snaffles: &Vec<Snaffle>,
-               _bludgers: &Vec<Bludger>,
-    ) {
+    pub fn act(&mut self, state: &mut State) {
         let action: String = if self.has_snaffle {
             self.throw_action()
         } else {
-            if self.should_magic(other_wizard, opponents, snaffles, magic_to_use.clone()) {
-                self.magic_action(other_wizard, opponents, snaffles, magic_to_use)
+            if self.should_magic {
+                self.magic_action(state)
             } else {
-                self.move_action(other_wizard, opponents, snaffles)
+                self.move_action()
             }
         };
         println!("{}", action)
+    }
+
+    pub fn update(&mut self, x: i32, y: i32, vx: i32, vy: i32, has_snaffle: bool) {
+        self.pos = Vector2::new(x as f32, y as f32);
+        self.velocity = Vector2::new(vx as f32, vy as f32);
+        self.has_snaffle = has_snaffle;
+    }
+
+    pub fn decision_make(&mut self, state: &State) {
+        self.target_snaffle = self.find_most_desirable_snaffle(state);
+        self.should_magic = self.should_magic(state);
     }
 
     #[allow(dead_code)]
@@ -220,9 +220,7 @@ impl Wizard {
         self.pos.add(self.velocity.mul_num(self.friction))
     }
 
-    fn move_action(&mut self, other_wizard: &Wizard, opponents: &Vec<Wizard>, snaffles: &Vec<Snaffle>) -> String {
-        let snaffle = self.find_most_desirable_snaffle(other_wizard, opponents, snaffles);
-        self.target_snaffle = snaffle;
+    fn move_action(&self) -> String {
         match self.target_snaffle {
             Some(s) => {
                 let dest = s.destination();
@@ -236,52 +234,29 @@ impl Wizard {
         format!("{} {} {} {}", "THROW", dest.x as i32, dest.y as i32, self.power_to_destination(dest))
     }
 
-    fn should_magic(&self, other_wizard: &Wizard, opponents: &Vec<Wizard>, snaffles: &Vec<Snaffle>, magic: i32) -> bool {
-        // Strategy to target opponents with magic
-        magic > 10 && opponents.iter().any(|o| o.has_snaffle)
+    fn should_magic(&self, state: &State) -> bool {
+        // Strategy to target snaffles when opponents have a snaffle
+        state.magic > 10 && state.opponents.iter().any(|o| o.has_snaffle)
     }
 
-    fn magic_action(&self, other_wizard: &Wizard, opponents: &Vec<Wizard>, snaffles: &Vec<Snaffle>, magic: &mut i32) -> String {
-        let target = self.find_most_desirable_magic_target(opponents, snaffles);
-        // Goal (Away for wizard targets)
+    fn magic_action(&self, state: &mut State) -> String {
+        let target = match self.find_most_desirable_magic_target(state) {
+            Some(t) => t,
+            None => Target::Wizard(state.opponents.first().cloned().unwrap())
+        };
         let dest = self.throw_destination();
-        let magic_to_use = *magic / 2;
-        *magic -= magic_to_use;
+        let magic_to_use = state.magic / 2;
+        state.magic -= magic_to_use;
         match target {
-            Target::Wizard(w) => format!("{} {} {} {} {}", "WINGARDIUM", w.id, dest.x as i32, dest.y as i32, magic_to_use),
-            Target::Snaffle(s) => format!("{} {} {} {} {}", "WINGARDIUM", s.id, dest.x as i32, dest.y as i32, magic_to_use)
+            Target::Wizard(w) =>
+                format!("{} {} {} {} {}", "WINGARDIUM", w.id, dest.x as i32, dest.y as i32, magic_to_use),
+            Target::Snaffle(s) =>
+                format!("{} {} {} {} {}", "WINGARDIUM", s.id, dest.x as i32, dest.y as i32, magic_to_use)
         }
     }
 
-    // If another wizard has target, ignore that target from snaffles list.
-    // Select snaffle closest to opponent goal
-    fn find_most_desirable_snaffle(&self, other_wizard: &Wizard, opponents: &Vec<Wizard>, snaffles: &Vec<Snaffle>) -> Option<Snaffle> {
-        let mut snaffles = snaffles.clone();
-
-        // Remove snaffle held by other wizard
-        if other_wizard.target_snaffle.is_some() {
-            snaffles.remove(
-                snaffles.iter().position(|s| { s.id == other_wizard.target_snaffle.unwrap().id }).unwrap()
-            );
-        }
-
-        // Remove snaffle held by opponent
-        for o in opponents {
-            if o.has_snaffle {
-                let mut snaffle_to_remove = None;
-                for s in &snaffles {
-                    if s.collides_with_wizard(o) {
-                        snaffle_to_remove = Some(s);
-                    }
-                }
-                if snaffle_to_remove.is_some() {
-                    snaffles.remove(
-                        snaffles.iter().position(|s| { snaffle_to_remove.unwrap().id == s.id }).unwrap()
-                    );
-                }
-            }
-        }
-
+    fn find_most_desirable_snaffle(&self, state: &State) -> Option<Snaffle> {
+        let mut snaffles = state.free_snaffles();
         // Choose closest snaffle
         snaffles.sort_by(|a, b|
             (a.pos.distance(self.pos) as i32)
@@ -290,10 +265,18 @@ impl Wizard {
         snaffles.first().cloned()
     }
 
-    fn find_most_desirable_magic_target(&self, opponents: &Vec<Wizard>, snaffles: &Vec<Snaffle>) -> Target {
-        // Strategy to target opponents with magic
-        let mut ops = opponents.clone();
-        Target::Wizard(ops.iter().find(|o| o.has_snaffle).cloned().unwrap())
+    // Snaffles are most desirable?
+    fn find_most_desirable_magic_target(&self, state: &State) -> Option<Target> {
+        let mut snaffles = state.free_snaffles();
+        if snaffles.len() == 0 {
+            return None;
+        }
+        // Choose farthest snaffle
+        snaffles.sort_by(|a, b|
+            (a.pos.distance(self.pos) as i32)
+                .cmp(&(b.pos.distance(self.pos) as i32))
+        );
+        Some(Target::Snaffle(snaffles.last().cloned().unwrap()))
     }
 
     //ToDo don't use rand...
@@ -326,6 +309,87 @@ impl Wizard {
 enum Target {
     Snaffle(Snaffle),
     Wizard(Wizard),
+}
+
+#[derive(Debug, Clone, PartialOrd, PartialEq)]
+struct State {
+    pub snaffles: Vec<Snaffle>,
+    pub opponents: Vec<Wizard>,
+    pub wizards: Vec<Wizard>,
+    pub bludgers: Vec<Bludger>,
+    pub magic: i32,
+    pub team_id: i32,
+}
+
+impl State {
+    pub fn new(team_id: i32) -> State {
+        State {
+            snaffles: vec![],
+            opponents: vec![],
+            wizards: vec![],
+            bludgers: vec![],
+            magic: 0,
+            team_id,
+        }
+    }
+
+    pub fn other_wizard(&self, id: i32) -> Wizard {
+        self.wizards.iter().find(|w| w.id != id).cloned().unwrap()
+    }
+
+    pub fn free_opponents(&self) -> Vec<Wizard> {
+        self.opponents.iter().filter(|o| o.has_snaffle == false).cloned().collect()
+    }
+
+    pub fn taken_opponents(&self) -> Vec<Wizard> {
+        self.opponents.iter().filter(|o| o.has_snaffle == true).cloned().collect()
+    }
+
+    pub fn taken_snaffles(&self) -> Vec<Snaffle> {
+        let taken_opponents = self.taken_opponents();
+        if taken_opponents.len() > 0 {
+            return self.snaffles.iter().filter(|s|
+                taken_opponents.iter().any(|o| s.collides_with_wizard(o))
+            ).cloned().collect();
+        }
+        vec![]
+    }
+
+    pub fn free_snaffles(&self) -> Vec<Snaffle> {
+        let taken_snaffles = self.taken_snaffles();
+        self.snaffles.iter().filter(|&s1|
+            !taken_snaffles.iter().any(|s2| s2 == s1)).cloned().collect()
+    }
+
+    pub fn update_state(&mut self, init: bool) {
+        let (_my_score, my_magic, _opponent_score, _opponent_magic, entities) = parse_loop_variables();
+
+        if init {
+            for _ in 0..entities as usize {
+                let (entity_id, entity_type, x, y, vx, vy, has_snaffle) = parse_entity_variables();
+                match &entity_type[..] {
+                    "WIZARD" => self.wizards.push(Wizard::new(entity_id, x, y, vx, vy, has_snaffle, self.team_id)),
+                    "OPPONENT_WIZARD" => self.opponents.push(Wizard::new(entity_id, x, y, vx, vy, has_snaffle, 1 - self.team_id)),
+                    "SNAFFLE" => self.snaffles.push(Snaffle::new(entity_id, x, y, vx, vy)),
+                    "BLUDGER" => self.bludgers.push(Bludger::new(entity_id, x, y, vx, vy, -1)),
+                    _ => ()
+                }
+            }
+        } else {
+            for _ in 0..entities as usize {
+                let (entity_id, entity_type, x, y, vx, vy, has_snaffle) = parse_entity_variables();
+                match &entity_type[..] {
+                    "WIZARD" => self.wizards.iter_mut().find(|w| w.id == entity_id).unwrap().update(x, y, vx, vy, has_snaffle),
+                    "OPPONENT_WIZARD" => self.opponents.iter_mut().find(|w| w.id == entity_id).unwrap().update(x, y, vx, vy, has_snaffle),
+                    "SNAFFLE" => self.snaffles.iter_mut().find(|s| s.id == entity_id).unwrap()
+                                     .update(x, y, vx, vy),
+                    "BLUDGER" => self.bludgers.iter_mut().find(|b| b.id == entity_id).unwrap()
+                                     .update(x, y, vx, vy),
+                    _ => ()
+                }
+            }
+        }
+    }
 }
 
 // if 0 you need to score on the right of the map, if 1 you need to score on the left 
@@ -371,51 +435,20 @@ fn parse_entity_variables() -> (i32, String, i32, i32, i32, i32, bool) {
 
 fn main() {
     let my_team_id = parse_team_id();
-    let mut game_started = false;
-    //Holds state during whole game to keep track of last wizard hit
-    let mut bludgers = vec![];
+    let mut init = true;
+    let mut state = State::new(my_team_id);
 
     loop {
-        let (_my_score, mut my_magic, _opponent_score, _opponent_magic, entities) = parse_loop_variables();
-        let mut snaffles = vec![];
-        let mut my_wizards = vec![];
-        let mut opponent_wizards = vec![];
-        let mut _all_wizards = vec![];
+        state.update_state(!init);
 
-        for _ in 0..entities as usize {
-            let (entity_id, entity_type, x, y, vx, vy, has_snaffle) = parse_entity_variables();
-            match &entity_type[..] {
-                "WIZARD" => my_wizards.push(Wizard::new(entity_id, x, y, vx, vy, has_snaffle, false, false, my_team_id)),
-                "OPPONENT_WIZARD" => opponent_wizards.push(Wizard::new(entity_id, x, y, vx, vy, has_snaffle, true, false, 1 - my_team_id)),
-                "SNAFFLE" => snaffles.push(Snaffle::new(entity_id, x, y, vx, vy)),
-                "BLUDGER" => {
-                    if !game_started {
-                        bludgers.push(Bludger::new(entity_id, x, y, vx, vy, -1));
-                    } else {
-                        for bludger in bludgers.iter_mut() {
-                            if bludger.id == entity_id {
-                                bludger.set_coords_and_velocity(x, y, vx, vy);
-                            }
-                        }
-                    }
-                }
-                _ => ()
-            }
-            _all_wizards = my_wizards.iter().cloned()
-                                     .chain(opponent_wizards.iter().cloned())
-                                     .collect();
-        }
+        let mut wizard1 = state.wizards[0];
+        let mut wizard2 = state.wizards[1];
+        wizard1.decision_make(&state);
+        wizard2.decision_make(&state);
 
-        let ref_magic: &mut i32 = &mut my_magic;
-
-        let mut wizard1 = my_wizards[0];
-        let mut wizard2 = my_wizards[1];
-        for b in bludgers.clone() {
-            if b.collides_with_wizard(&wizard1) { wizard1.last_hit = true }
-            if b.collides_with_wizard(&wizard2) { wizard2.last_hit = true }
-        }
-        wizard1.act(ref_magic, &wizard2, &opponent_wizards, &snaffles, &bludgers);
-        wizard2.act(ref_magic, &wizard1, &opponent_wizards, &snaffles, &bludgers);
-        game_started = true;
+        wizard1.act(&mut state);
+        wizard2.act(&mut state);
+        
+        init = false;
     }
 }
