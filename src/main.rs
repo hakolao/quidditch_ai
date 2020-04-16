@@ -87,6 +87,10 @@ impl Snaffle {
         } else { Vector2::new(GOAL0_CENTER.0 as f32, GOAL0_CENTER.1 as f32) };
         goal_center.distance(self.pos)
     }
+
+    pub fn collides_with_wizard(&self, wizard: &Wizard) -> bool {
+        wizard.pos.distance(self.pos) < wizard.radius + self.radius
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialOrd, PartialEq)]
@@ -143,7 +147,7 @@ impl Bludger {
         self.velocity.x = vy as f32;
     }
 
-    pub fn collides(&self, wizard: &Wizard) -> bool {
+    pub fn collides_with_wizard(&self, wizard: &Wizard) -> bool {
         wizard.pos.distance(self.pos) < wizard.radius + self.radius
     }
 
@@ -202,8 +206,8 @@ impl Wizard {
         let action: String = if self.has_snaffle {
             self.throw_action()
         } else {
-            if self.should_magic(snaffles, magic_to_use.clone()) {
-                self.magic_action(opponents, snaffles, magic_to_use)
+            if self.should_magic(other_wizard, opponents, snaffles, magic_to_use.clone()) {
+                self.magic_action(other_wizard, opponents, snaffles, magic_to_use)
             } else {
                 self.move_action(other_wizard, opponents, snaffles)
             }
@@ -232,14 +236,13 @@ impl Wizard {
         format!("{} {} {} {}", "THROW", dest.x as i32, dest.y as i32, self.power_to_destination(dest))
     }
 
-    fn should_magic(&self, snaffles: &Vec<Snaffle>, magic: i32) -> bool {
-        // if any snaffle is close to own goal (get it away from there! :D)
-        magic > (0.3 * MAX_MAGIC as f32) as i32 ||
-            snaffles.iter().any(|s| s.distance_from_goal(1 - self.team_id) <= (magic * MAGIC_MUL) as f32)
+    fn should_magic(&self, other_wizard: &Wizard, opponents: &Vec<Wizard>, snaffles: &Vec<Snaffle>, magic: i32) -> bool {
+        // Strategy to target opponents with magic
+        magic > 10 && opponents.iter().any(|o| o.has_snaffle)
     }
 
-    fn magic_action(&self, wizards: &Vec<Wizard>, snaffles: &Vec<Snaffle>, magic: &mut i32) -> String {
-        let target = self.find_most_desirable_magic_target(wizards, snaffles);
+    fn magic_action(&self, other_wizard: &Wizard, opponents: &Vec<Wizard>, snaffles: &Vec<Snaffle>, magic: &mut i32) -> String {
+        let target = self.find_most_desirable_magic_target(opponents, snaffles);
         // Goal (Away for wizard targets)
         let dest = self.throw_destination();
         let magic_to_use = *magic / 2;
@@ -252,46 +255,45 @@ impl Wizard {
 
     // If another wizard has target, ignore that target from snaffles list.
     // Select snaffle closest to opponent goal
-    fn find_most_desirable_snaffle(&self, other_wizard: &Wizard, _opponents: &Vec<Wizard>, snaffles: &Vec<Snaffle>) -> Option<Snaffle> {
+    fn find_most_desirable_snaffle(&self, other_wizard: &Wizard, opponents: &Vec<Wizard>, snaffles: &Vec<Snaffle>) -> Option<Snaffle> {
         let mut snaffles = snaffles.clone();
 
+        // Remove snaffle held by other wizard
         if other_wizard.target_snaffle.is_some() {
             snaffles.remove(
                 snaffles.iter().position(|s| { s.id == other_wizard.target_snaffle.unwrap().id }).unwrap()
             );
         }
 
+        // Remove snaffle held by opponent
+        for o in opponents {
+            if o.has_snaffle {
+                let mut snaffle_to_remove = None;
+                for s in &snaffles {
+                    if s.collides_with_wizard(o) {
+                        snaffle_to_remove = Some(s);
+                    }
+                }
+                if snaffle_to_remove.is_some() {
+                    snaffles.remove(
+                        snaffles.iter().position(|s| { snaffle_to_remove.unwrap().id == s.id }).unwrap()
+                    );
+                }
+            }
+        }
+
+        // Choose closest snaffle
         snaffles.sort_by(|a, b|
-            (a.distance_from_goal(self.team_id) as i32)
-                .cmp(&(b.distance_from_goal(self.team_id) as i32))
+            (a.pos.distance(self.pos) as i32)
+                .cmp(&(b.pos.distance(self.pos) as i32))
         );
         snaffles.first().cloned()
     }
 
     fn find_most_desirable_magic_target(&self, opponents: &Vec<Wizard>, snaffles: &Vec<Snaffle>) -> Target {
+        // Strategy to target opponents with magic
         let mut ops = opponents.clone();
-        let mut snaffles = snaffles.clone();
-
-        // Sort snaffles by closest to goal
-        snaffles.sort_by(|a, b|
-            (a.distance_from_goal(self.team_id) as i32)
-                .cmp(&(b.distance_from_goal(self.team_id) as i32))
-        );
-        // But select closest to own goal!
-        let snaffle = snaffles.last().cloned();
-        // Sort opponents by closest to a snaffle
-        ops.sort_by(|a, b|
-            snaffles.iter().map(|s| s.pos.distance(a.pos) as i32).min()
-                    .cmp(&snaffles.iter().map(|s| s.pos.distance(b.pos) as i32).min()));
-        let op_wizard = ops.first().cloned().unwrap();
-        match snaffle {
-            Some(s) => {
-                // Distance from own goal for snaffle less than op distance from snaffle
-                if s.distance_from_goal(1 - self.team_id) < op_wizard.pos.distance(s.pos)
-                { Target::Snaffle(s) } else { Target::Wizard(op_wizard) }
-            }
-            None => Target::Wizard(op_wizard)
-        }
+        Target::Wizard(ops.iter().find(|o| o.has_snaffle).cloned().unwrap())
     }
 
     //ToDo don't use rand...
@@ -409,8 +411,8 @@ fn main() {
         let mut wizard1 = my_wizards[0];
         let mut wizard2 = my_wizards[1];
         for b in bludgers.clone() {
-            if b.collides(&wizard1) { wizard1.last_hit = true }
-            if b.collides(&wizard2) { wizard2.last_hit = true }
+            if b.collides_with_wizard(&wizard1) { wizard1.last_hit = true }
+            if b.collides_with_wizard(&wizard2) { wizard2.last_hit = true }
         }
         wizard1.act(ref_magic, &wizard2, &opponent_wizards, &snaffles, &bludgers);
         wizard2.act(ref_magic, &wizard1, &opponent_wizards, &snaffles, &bludgers);
