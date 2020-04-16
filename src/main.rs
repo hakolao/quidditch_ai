@@ -448,8 +448,8 @@ impl State {
         let wiz_goal_dist = wizard.distance_from_goal(self.team_id);
 
         // Shoot it down or up if close!
-        if target.distance_from_goal(1 - self.team_id) < 2000. {
-            if target.pos.y < (HEIGHT / 2) as f32 {
+        if target.distance_from_goal(1 - self.team_id) < 3000. {
+            if target.velocity.y < 0. {
                 return Vector2::new(target.pos.x, 0.);
             }
             return Vector2::new(target.pos.x, HEIGHT as f32);
@@ -521,19 +521,12 @@ impl State {
             }
             //Snaffle is close to own goal
             if s.distance_from_goal(1 - wizard.team_id) < 3000. {
-                desirability += 10;
+                desirability += 20;
             }
             //Snaffle is close
-            if s.pos.distance(wizard.pos) < 3000. {
-                desirability += 15;
-            }
-            //All opponents further than wizard from snaffle
-            if opponents.iter().all(|o| s.pos.distance(o.pos) > s.pos.distance(wizard.pos)) {
-                desirability += 15;
-            }
-            //Any opponents further than wizard from snaffle
-            else if opponents.iter().any(|o| s.pos.distance(o.pos) > s.pos.distance(wizard.pos)) {
-                desirability -= 5;
+            let snf_dist = s.pos.distance(wizard.pos);
+            if snf_dist < 3000. {
+                desirability += 16 - snf_dist as i32 / 1000;
             }
             (s.clone(), desirability)
         }).collect();
