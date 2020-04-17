@@ -80,13 +80,42 @@ impl Vector2 {
         Vector2::new(self.x + v2.x, self.y + v2.y)
     }
 
+    pub fn heading(&self, target: Vector2) -> Vector2 {
+        Vector2::new(target.x - self.x, target.y - self.y)
+    }
+
+    pub fn direction(&self, target: Vector2) -> Vector2 {
+        self.heading(target) / self.distance(target)
+    }
+
     pub fn mul_num(&self, num: f32) -> Vector2 {
         Vector2::new(self.x * num, self.y * num)
     }
 
+    pub fn mul(&self, v2: Vector2) -> Vector2 {
+        Vector2::new(self.x * v2.x, self.y * v2.y)
+    }
+
+    //Magnitude
     pub fn distance(&self, v2: Vector2) -> f32 {
         ((self.x - v2.x).powi(2) +
             (self.y - v2.y).powi(2)).sqrt()
+    }
+
+    pub fn x_dist(&self, v2: Vector2) -> f32 {
+        if self.x > v2.x {
+            self.x - v2.x
+        } else {
+            v2.x - self.x
+        }
+    }
+
+    pub fn y_dist(&self, v2: Vector2) -> f32 {
+        if self.y > v2.y {
+            self.y - v2.y
+        } else {
+            v2.y - self.y
+        }
     }
 }
 
@@ -107,9 +136,13 @@ impl Collider {
     pub fn collides(&self, other: &Collider) -> bool {
         self.pos.distance(other.pos) < self.radius + other.radius
     }
+
+    pub fn destination(&self) -> Vector2 {
+        self.pos.add(self.vel.mul_num(self.friction))
+    }
 }
 
-#[derive(Debug, Clone, Copy, PartialOrd, PartialEq)]
+#[derive(Debug, Clone, PartialOrd, PartialEq)]
 enum EntityType {
     Snaffle,
     Wizard,
@@ -117,7 +150,7 @@ enum EntityType {
     Bludger,
 }
 
-#[derive(Debug, Clone, Copy, PartialOrd, PartialEq)]
+#[derive(Debug, Clone, PartialOrd, PartialEq)]
 struct Entity {
     pub id: i32,
     pub entity_type: EntityType,
@@ -168,16 +201,37 @@ impl Goal {
         }
     }
 
+    pub fn destination_is_close(&self, entity: &Entity, close_to_limit: f32) -> bool {
+        self.points_inside_goal().any(|point| {
+            let dist_from_point = entity.collider.destination().distance(point);
+            dist_from_point < close_to_limit
+        })
+    }
+
+    pub fn points_inside_goal(&self) -> Vec<Vector2> {
+        let div = 6.;
+        let mut points = vec![];
+        for i in 0..(div as i32) {
+            points.push(Vector2::new(
+                self.pole_bottom.x,
+                self.pole_top.y + i as f32 * (4000.0 / div),
+            ))
+        }
+        points
+    }
+
     pub fn inner_bounds(&self) -> (Vector2, Vector2) {
         (
-            Vector2::new(self.pole_top.pos.x, self.pole_top.y + self.pole_top.radius),
-            Vector2::new(self.pole_bottom.pos.x, self.pole_bottom.y - self.pole_top.radius),
+            Vector2::new(self.pole_top.pos.x, self.pole_top.pos.y + self.pole_top.radius),
+            Vector2::new(self.pole_bottom.pos.x, self.pole_bottom.pos.y - self.pole_top.radius),
         )
     }
 
+    pub fn center(&self) -> Vector2 { Vector2::new(self.pole_bottom.pos.x, 3750.0) }
+
     pub fn random_inside_goal(&self) -> Vector2 {
         let mut rng = thread_rng();
-        let x_to = self.pole_top.x;
+        let x_to = self.pole_top.pos.x;
         let y_to = rng.gen_range(self.pole_top.pos.y, self.pole_bottom.pos.y);
         Vector2::new(x_to, y_to)
     }
@@ -271,10 +325,10 @@ impl State {
                                              e.entity_type == EntityType::Snaffle &&
                                                  existing_snaffles.iter().all(|s| s.id != e.id)
                                          }).map(|e| e.id).collect::<Vec<i32>>();
-            let new_entities = self.entities.clone().iter()
+            let new_entities = self.entities.iter()
                                    .filter(|e1| {
-                                       entities_to_remove.iter().all(|e2| e1.id != e2.id)
-                                   }).collect::<Vec<Entity>>();
+                                       entities_to_remove.iter().all(|&id| e1.id != id)
+                                   }).cloned().collect::<Vec<Entity>>();
             self.entities = new_entities;
         }
     }
@@ -309,6 +363,31 @@ impl State {
                     )
                 }
             }
+        }
+    }
+
+    fn optimal_action(&self, wizard: &Entity, magic_left: i32) -> ActionType {
+        if wizard.has_snaffle {
+            ActionType::Throw
+        } else if self.should_magic(wizard, magic_left) {
+            ActionType::Magic
+        } else {
+            ActionType::Move
+        }
+    }
+
+    fn should_magic(&self, wizard: &Entity, magic_left: i32) -> bool {
+        let close_to_limit = 1500.0;
+        // Close to target or own goal
+        if magic_left > 15 && self.snaffles().iter().any(|s|
+            self.target_goal.destination_is_close(s, close_to_limit)) ||
+            self.snaffles().iter().any(|s|
+                self.own_goal.destination_is_close(s, close_to_limit)) {
+            true
+        } else if magic_left > MAX_MAGIC / 2 {
+            true
+        } else {
+            false
         }
     }
 
