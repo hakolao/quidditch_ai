@@ -64,58 +64,25 @@ impl Vector2 {
     pub fn new(x: f32, y: f32) -> Vector2 {
         Vector2 { x, y }
     }
-
-    #[allow(dead_code)]
     pub fn len(&self) -> f32 {
         (self.x.powi(2) + self.y.powi(2)).sqrt()
     }
-
-    #[allow(dead_code)]
     pub fn normalized(&self) -> Vector2 {
         let len = self.len();
         Vector2::new(self.x / len, self.y / len)
     }
-
     pub fn add(&self, v2: Vector2) -> Vector2 {
         Vector2::new(self.x + v2.x, self.y + v2.y)
     }
-
-    pub fn heading(&self, target: Vector2) -> Vector2 {
-        Vector2::new(target.x - self.x, target.y - self.y)
-    }
-
-    pub fn direction(&self, target: Vector2) -> Vector2 {
-        self.heading(target) / self.distance(target)
-    }
-
+    pub fn heading(&self, target: Vector2) -> Vector2 { Vector2::new(target.x - self.x, target.y - self.y) }
+    pub fn direction(&self, target: Vector2) -> Vector2 { self.heading(target) / self.distance(target) }
     pub fn mul_num(&self, num: f32) -> Vector2 {
         Vector2::new(self.x * num, self.y * num)
     }
-
-    pub fn mul(&self, v2: Vector2) -> Vector2 {
-        Vector2::new(self.x * v2.x, self.y * v2.y)
-    }
-
-    //Magnitude
+    pub fn mul(&self, v2: Vector2) -> Vector2 { Vector2::new(self.x * v2.x, self.y * v2.y) }
     pub fn distance(&self, v2: Vector2) -> f32 {
         ((self.x - v2.x).powi(2) +
             (self.y - v2.y).powi(2)).sqrt()
-    }
-
-    pub fn x_dist(&self, v2: Vector2) -> f32 {
-        if self.x > v2.x {
-            self.x - v2.x
-        } else {
-            v2.x - self.x
-        }
-    }
-
-    pub fn y_dist(&self, v2: Vector2) -> f32 {
-        if self.y > v2.y {
-            self.y - v2.y
-        } else {
-            v2.y - self.y
-        }
     }
 }
 
@@ -132,11 +99,9 @@ impl Collider {
     pub fn new(pos: Vector2, vel: Vector2, friction: f32, mass: f32, radius: f32) -> Collider {
         Collider { pos, vel, friction, mass, radius }
     }
-
     pub fn collides(&self, other: &Collider) -> bool {
         self.pos.distance(other.pos) < self.radius + other.radius
     }
-
     pub fn destination(&self) -> Vector2 {
         self.pos.add(self.vel.mul_num(self.friction))
     }
@@ -162,7 +127,6 @@ impl Entity {
     pub fn new(id: i32, entity_type: EntityType, collider: Collider, has_snaffle: bool) -> Entity {
         Entity { id, entity_type, collider, has_snaffle }
     }
-
     pub fn update(&mut self, x: i32, y: i32, vx: i32, vy: i32, has_snaffle: bool) {
         self.collider.pos.x = x as f32;
         self.collider.pos.y = y as f32;
@@ -200,14 +164,12 @@ impl Goal {
             }
         }
     }
-
     pub fn destination_is_close(&self, entity: &Entity, close_to_limit: f32) -> bool {
         self.points_inside_goal().any(|point| {
             let dist_from_point = entity.collider.destination().distance(point);
             dist_from_point < close_to_limit
         })
     }
-
     pub fn points_inside_goal(&self) -> Vec<Vector2> {
         let div = 6.;
         let mut points = vec![];
@@ -219,16 +181,13 @@ impl Goal {
         }
         points
     }
-
     pub fn inner_bounds(&self) -> (Vector2, Vector2) {
         (
             Vector2::new(self.pole_top.pos.x, self.pole_top.pos.y + self.pole_top.radius),
             Vector2::new(self.pole_bottom.pos.x, self.pole_bottom.pos.y - self.pole_top.radius),
         )
     }
-
     pub fn center(&self) -> Vector2 { Vector2::new(self.pole_bottom.pos.x, 3750.0) }
-
     pub fn random_inside_goal(&self) -> Vector2 {
         let mut rng = thread_rng();
         let x_to = self.pole_top.pos.x;
@@ -262,7 +221,6 @@ impl State {
             target_goal: Goal::new(team_id),
         }
     }
-
     pub fn update(&mut self, init: bool) {
         let (_my_score, my_magic, _opponent_score, _opponent_magic, entities) = parse_loop_variables();
         self.magic = my_magic;
@@ -332,7 +290,6 @@ impl State {
             self.entities = new_entities;
         }
     }
-
     pub fn act_turn(&mut self) {
         let mut magic_left = self.magic;
         for wizard in &self.wizards() {
@@ -365,7 +322,6 @@ impl State {
             }
         }
     }
-
     fn optimal_action(&self, wizard: &Entity, magic_left: i32) -> ActionType {
         if wizard.has_snaffle {
             ActionType::Throw
@@ -375,7 +331,6 @@ impl State {
             ActionType::Move
         }
     }
-
     fn should_magic(&self, wizard: &Entity, magic_left: i32) -> bool {
         let close_to_limit = 1500.0;
         // Close to target or own goal
@@ -390,46 +345,31 @@ impl State {
             false
         }
     }
-
     fn throw_destination(&self, wizard: &Entity) -> Vector2 {}
-
     fn throw_power(&self, wizard: &Entity, dest: &Vector2) -> i32 {}
-
     fn magic_destination(&self, wizard: &Entity, target: &Entity) -> Vector2 {}
-
     fn magic_power(&self, target: &Entity, dest: &Vector2, magic_left: i32) -> i32 {}
-
     fn move_destination(&self, wizard: &Entity) -> Vector2 {}
-
     fn thrust_power(&self, wizard: &Entity, dest: &Vector2) -> i32 {}
-
     fn other_wizard(&self, wizard: &Entity) -> Entity {
         self.wizards().iter().find(|e| e.id != wizard.id).cloned().unwrap()
     }
-
     fn move_action(&self, dest: &Vector2, thrust: i32) {
         println!("{} {} {} {}", "MOVE", dest.x as i32, dest.y as i32, thrust)
     }
-
     fn throw_action(&self, dest: &Vector2, power: i32) {
         println!("{} {} {} {}", "THROW", dest.x as i32, dest.y as i32, power)
     }
-
     fn magic_action(&mut self, target_id: i32, dest: &Vector2, magic_power: i32) {
         println!("{} {} {} {} {}", "WINGARDIUM", target_id, dest.x as i32, dest.y as i32, magic_power)
     }
-
     fn entities_of_type(&self, entity_type: EntityType) -> Vec<Entity> {
         self.entities.iter()
             .filter(|e| e.entity_type == entity_type).cloned().collect()
     }
-
     fn wizards(&self) -> Vec<Entity> { self.entities_of_type(EntityType::Wizard) }
-
     fn opponents(&self) -> Vec<Entity> { self.entities_of_type(EntityType::Opponent) }
-
     fn bludgers(&self) -> Vec<Entity> { self.entities_of_type(EntityType::Bludger) }
-
     fn snaffles(&self) -> Vec<Entity> { self.entities_of_type(EntityType::Snaffle) }
 }
 
