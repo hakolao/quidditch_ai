@@ -105,6 +105,10 @@ impl Collider {
     pub fn destination(&self) -> Vector2 {
         self.pos.add(self.vel.mul_num(self.friction))
     }
+    //ToDo: Implement boundary checks, bounces & collisions
+    pub fn destination_turns(&self, turns: i32) -> Vector2 {
+        self.pos.add(self.vel.mul_num(self.friction.powi(turns)))
+    }
 }
 
 #[derive(Debug, Clone, PartialOrd, PartialEq)]
@@ -133,6 +137,22 @@ impl Entity {
         self.collider.vel.x = vx as f32;
         self.collider.vel.x = vy as f32;
         self.has_snaffle = has_snaffle;
+    }
+
+    //ToDo could implement destinations & values per turn, e.g future(2) 2 turns onwards
+    pub fn future(&self) -> Entity {
+        Entity {
+            id: self.id,
+            entity_type: self.entity_type.clone(),
+            collider: Collider::new(
+                self.collider.destination(),
+                self.collider.vel.mul_num(self.collider.friction),
+                self.collider.friction,
+                self.collider.mass,
+                self.collider.radius,
+            ),
+            has_snaffle: self.has_snaffle,
+        }
     }
 }
 
@@ -302,8 +322,8 @@ impl State {
                     );
                 }
                 ActionType::Magic => {
-                    let target: Entity = self.magic_target(wizard);
-                    let dest: Vector2 = self.magic_destination(wizard, &target);
+                    let target: Entity = self.magic_target();
+                    let dest: Vector2 = self.magic_destination(&target);
                     let magic_power = self.magic_power(&target.pos, &dest, magic_left);
                     self.magic_action(
                         target.id,
@@ -345,10 +365,98 @@ impl State {
             false
         }
     }
-    fn throw_destination(&self, wizard: &Entity) -> Vector2 {}
-    fn throw_power(&self, wizard: &Entity, dest: &Vector2) -> i32 {}
-    fn magic_destination(&self, wizard: &Entity, target: &Entity) -> Vector2 {}
-    fn magic_power(&self, target: &Entity, dest: &Vector2, magic_left: i32) -> i32 {}
+    fn throw_destination(&self, wizard: &Entity) -> Vector2 {
+        let other_wizard_dest = self.other_wizard(wizard).collider.destination();
+        //Bludgers hit other wizard next turn
+        if self.bludgers().iter().any(|b| b.future().collider.collides(
+            &self.other_wizard(wizard).future().collider
+        )) {
+            self.target_goal.random_inside_goal()
+            //other wizard is close && its destination distance from goal is closer
+            //than self => pass to other wizard
+            //ToDo check that nothing is in between
+        } else if other_wizard_dest.distance(wizard.collider.pos) < 1500. &&
+            other_wizard_dest.distance(self.target_goal.center()) <
+                wizard.collider.pos.distance(self.target_goal.center()) {
+            other_wizard_dest
+        } else {
+            self.target_goal.random_inside_goal()
+        }
+    }
+    fn throw_power(&self, wizard: &Entity, dest: &Vector2) -> i32 {
+        let power_needed = wizard.collider.pos.distance(dest.clone()) * 0.75 / 0.5;
+        if power_needed as i32 >= MAX_POWER {
+            MAX_POWER
+        } else {
+            power_needed
+        }
+    }
+    fn magic_target(&self) -> Entity {
+        // Since should magic is about "close to target or own goal", let's find closest to either
+        let mut snaffles = self.snaffles();
+        // Return random opponent if no snaffles
+        if snaffles.len() == 0 {
+            return self.opponents().first().cloned().unwrap();
+        }
+        snaffles.sort_by(|a, b| {
+            (a.collider.destination().distance(self.target_goal.center()) as i32).cmp(
+                &(b.collider.destination().distance(self.target_goal.center()) as i32)
+            )
+        });
+        let closest_to_target = snaffles.first().cloned().unwrap();
+        snaffles.sort_by(|a, b| {
+            (a.collider.destination().distance(self.own_goal.center()) as i32).cmp(
+                &(b.collider.destination().distance(self.own_goal.center()) as i32)
+            )
+        });
+        let closest_to_own_goal = snaffles.first().cloned().unwrap();
+        if closest_to_target.collider.pos.distance(self.target_goal.center()) <
+            closest_to_own_goal.collider.pos.distance(self.own_goal.center()) {
+            closest_to_target
+        } else {
+            closest_to_own_goal
+        }
+    }
+    fn magic_destination(&self, target: &Entity) -> Vector2 {
+        let wizards = self.wizards();
+        //Take their future positions
+        let wiz1 = wizards[0].clone().future();
+        let wiz2 = wizards[1].clone().future();
+        let wiz1_is_ahead = wiz1.collider.pos.distance(self.target_goal.center()) <
+            target.collider.pos.distance(self.target_goal.center());
+        let wiz2_is_ahead = wiz2.collider.pos.distance(self.target_goal.center()) <
+            target.collider.pos.distance(self.target_goal.center());
+        let wiz1_dist = wiz1.collider.pos.distance(target.collider.pos);
+        let wiz2_dist = wiz2.collider.pos.distance(target.collider.pos);
+        //Bludgers hit any wizard next turn
+        if self.bludgers().iter().any(|b| {
+            b.future().collider.collides(&wiz1.collider) ||
+                b.future().collider.collides(&wiz2.collider)
+        }) {
+            self.target_goal.random_inside_goal()
+            //Target is close to goal, shoot at goal
+        } else if self.target_goal.destination_is_close(target, 2000.) {
+            self.target_goal.random_inside_goal()
+            //Target is closer to wiz1 than wiz1 && wiz1 is closer to goal => pass to wiz1
+        } else if wiz1_dist < wiz2_dist && wiz1_is_ahead {
+            wiz1.collider.pos
+            //Second wizard is closer to target && closer to goal than target
+        } else if wiz2_dist < wiz1_dist && wiz2_is_ahead {
+            wiz2.collider.pos
+        } else {
+            self.target_goal.random_inside_goal()
+        }
+    }
+    fn magic_power(&self, target: &Entity, dest: &Vector2, magic_left: i32) -> i32 {
+        let magic_needed = (target.destination()
+                                  .distance(dest.clone()) *
+            target.collider.friction / target.collider.mass) / 15.;
+        if magic_needed as i32 >= magic_left {
+            magic_left
+        } else {
+            magic_needed
+        }
+    }
     fn move_destination(&self, wizard: &Entity) -> Vector2 {}
     fn thrust_power(&self, wizard: &Entity, dest: &Vector2) -> i32 {}
     fn other_wizard(&self, wizard: &Entity) -> Entity {
