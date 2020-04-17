@@ -125,11 +125,12 @@ struct Entity {
     pub entity_type: EntityType,
     pub collider: Collider,
     pub has_snaffle: bool,
+    pub target: Option<i32>,
 }
 
 impl Entity {
     pub fn new(id: i32, entity_type: EntityType, collider: Collider, has_snaffle: bool) -> Entity {
-        Entity { id, entity_type, collider, has_snaffle }
+        Entity { id, entity_type, collider, has_snaffle, target: None }
     }
     pub fn update(&mut self, x: i32, y: i32, vx: i32, vy: i32, has_snaffle: bool) {
         self.collider.pos.x = x as f32;
@@ -138,7 +139,9 @@ impl Entity {
         self.collider.vel.x = vy as f32;
         self.has_snaffle = has_snaffle;
     }
-
+    pub fn set_target(&mut self, target: Option<i32>) {
+        self.target = target;
+    }
     //ToDo could implement destinations & values per turn, e.g future(2) 2 turns onwards
     pub fn future(&self) -> Entity {
         Entity {
@@ -152,6 +155,7 @@ impl Entity {
                 self.collider.radius,
             ),
             has_snaffle: self.has_snaffle,
+            target: self.target.clone(),
         }
     }
 }
@@ -224,11 +228,11 @@ enum ActionType {
 
 #[derive(Debug, Clone, PartialOrd, PartialEq)]
 struct State {
-    pub entities: Vec<Entity>,
-    pub magic: i32,
-    pub team_id: i32,
-    pub own_goal: Goal,
-    pub target_goal: Goal,
+    entities: Vec<Entity>,
+    magic: i32,
+    team_id: i32,
+    own_goal: Goal,
+    target_goal: Goal,
 }
 
 impl State {
@@ -309,6 +313,7 @@ impl State {
                                    }).cloned().collect::<Vec<Entity>>();
             self.entities = new_entities;
         }
+        self.set_targets();
     }
     pub fn act_turn(&mut self) {
         let mut magic_left = self.magic;
@@ -457,8 +462,62 @@ impl State {
             magic_needed
         }
     }
-    fn move_destination(&self, wizard: &Entity) -> Vector2 {}
-    fn thrust_power(&self, wizard: &Entity, dest: &Vector2) -> i32 {}
+    fn move_destination(&mut self, wizard: &Entity) -> Vector2 {
+        if wizard.target.is_some() {
+            let target_id = wizard.target.unwrap();
+            self.entities.iter().find(|e| e.id == target_id).cloned().unwrap()
+        }
+        Vector2::new(WIDTH as f32 / 2., HEIGHT as f32 / 2.)
+    }
+    fn thrust_power(&self, wizard: &Entity, dest: &Vector2) -> i32 {
+        let thrust_needed = wizard.collider.pos.distance(dest.clone()) *
+            wizard.collider.friction / wizard.collider.mass;
+        if thrust_needed as i32 >= MAX_THRUST {
+            MAX_THRUST
+        } else {
+            thrust_needed
+        }
+    }
+
+    fn set_targets(&mut self) {
+        let wizards = self.entities.iter_mut()
+                          .find(|e| e.entity_type == EntityType::Wizard).unwrap();
+        let wiz1: &mut Entity = wizards[0];
+        let wiz2: &mut Entity = wizards[1];
+        //Reset targets
+        wiz1.set_target(None);
+        wiz2.set_target(None);
+        let mut snaffles = self.snaffles();
+        //No snaffles, stop
+        if snaffles.len() == 0 {
+            return;
+        }
+        // Sort snaffles closest to wiz1
+        snaffles.sort_by(|a, b| {
+            (a.collider.pos.distance(wiz1.collider.pos) as i32).cmp(
+                &(b.collider.pos.distance(wiz1.collider.pos) as i32)
+            )
+        });
+        wiz1.set_target(Some(snaffles.first().unwrap().id));
+        //If just one snaffle, target same
+        if snaffles.len() == 0 {
+            wiz2.set_target(Some(snaffles.first().unwrap().id))
+            return;
+        }
+        // Remove wiz1's target
+        snaffles.remove(
+            self.snaffles().iter().position(|s| {
+                s.id == wiz1.target.unwrap()
+            }).unwrap()
+        );
+        // Sort snaffles closest to wiz2
+        snaffles.sort_by(|a, b| {
+            (a.collider.pos.distance(wiz2.collider.pos) as i32).cmp(
+                &(b.collider.pos.distance(wiz2.collider.pos) as i32)
+            )
+        });
+        wiz2.set_target(Some(snaffles.first().unwrap().id));
+    }
     fn other_wizard(&self, wizard: &Entity) -> Entity {
         self.wizards().iter().find(|e| e.id != wizard.id).cloned().unwrap()
     }
