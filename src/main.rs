@@ -338,16 +338,16 @@ impl State {
         for wizard in &self.wizards() {
             match self.optimal_action(&wizard, magic_left) {
                 ActionType::Throw => {
-                    let dest: Vector2 = self.throw_destination(&wizard);
+                    let dest: Vector2 = self.throw_destination(wizard);
                     self.throw_action(
                         &dest,
-                        self.throw_power(&dest),
+                        self.throw_power(wizard, &dest),
                     );
                 }
                 ActionType::Magic => {
-                    let target: Entity = self.magic_target(&wizard);
-                    let dest: Vector2 = self.magic_destination(&wizard);
-                    let magic_power = self.magic_power(&target.pos, &dest, &magic_left);
+                    let target: Entity = self.magic_target(wizard);
+                    let dest: Vector2 = self.magic_destination(wizard, &target);
+                    let magic_power = self.magic_power(&target.pos, &dest, magic_left);
                     self.magic_action(
                         target.id,
                         &dest,
@@ -356,10 +356,10 @@ impl State {
                     magic_left -= magic_power;
                 }
                 ActionType::Move => {
-                    let dest: Vector2 = self.move_destination(&wizard);
+                    let dest: Vector2 = self.move_destination(wizard);
                     self.move_action(
                         &dest,
-                        self.move_thrust(&wizard, &dest),
+                        self.move_thrust(wizard, &dest),
                     )
                 }
             }
@@ -390,6 +390,18 @@ impl State {
             false
         }
     }
+
+    fn throw_destination(&self, wizard: &Entity) -> Vector2 {}
+
+    fn throw_power(&self, wizard: &Entity, dest: &Vector2) -> i32 {}
+
+    fn magic_destination(&self, wizard: &Entity, target: &Entity) -> Vector2 {}
+
+    fn magic_power(&self, target: &Entity, dest: &Vector2, magic_left: i32) -> i32 {}
+
+    fn move_destination(&self, wizard: &Entity) -> Vector2 {}
+
+    fn thrust_power(&self, wizard: &Entity, dest: &Vector2) -> i32 {}
 
     fn other_wizard(&self, wizard: &Entity) -> Entity {
         self.wizards().iter().find(|e| e.id != wizard.id).cloned().unwrap()
