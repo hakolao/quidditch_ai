@@ -480,6 +480,7 @@ impl State {
     }
 
     fn set_targets(&mut self) {
+        //Mutable reference to entities (Wizards)
         let wizards = self.entities.iter_mut()
                           .find(|e| e.entity_type == EntityType::Wizard).unwrap();
         let wiz1: &mut Entity = wizards[0];
