@@ -245,7 +245,8 @@ impl Goal {
     pub fn random_inside_goal(&self) -> Vector2 {
         let mut rng = thread_rng();
         let x_to = self.pole_top.pos.x;
-        let y_to = rng.gen_range(self.pole_top.pos.y, self.pole_bottom.pos.y);
+        let inner_bounds = self.inner_bounds();
+        let y_to = rng.gen_range(inner_bounds.0.y + 150., inner_bounds.1.y - 150.);
         Vector2::new(x_to, y_to)
     }
 }
