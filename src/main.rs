@@ -495,7 +495,6 @@ impl State {
                 obstacles.iter().any(|o| o.collider.collides(c))
             })
         }).cloned().collect::<Vec<Vector2>>();
-        eprintln!("{:?}", possible_destinations);
         possible_destinations.iter().min_by(|&a, &b| {
             (a.distance(future_pos) as i32)
                 .cmp(&(b.distance(future_pos) as i32))
