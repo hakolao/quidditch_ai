@@ -448,25 +448,23 @@ impl State {
     fn magic_destination(&self, target: &Entity) -> Vector2 {
         let wizards = self.wizards();
         //Take their future positions
-        let wiz1 = wizards[0].clone().future();
-        let wiz2 = wizards[1].clone().future();
+        let wiz1 = wizards[0].clone().future_turns(2);
+        let wiz2 = wizards[1].clone().future_turns(2);
         let wiz1_is_ahead = wiz1.collider.pos.distance(self.target_goal.center()) <
             target.collider.pos.distance(self.target_goal.center());
         let wiz2_is_ahead = wiz2.collider.pos.distance(self.target_goal.center()) <
             target.collider.pos.distance(self.target_goal.center());
         let wiz1_dist = wiz1.collider.pos.distance(target.collider.pos);
         let wiz2_dist = wiz2.collider.pos.distance(target.collider.pos);
-        //Bludgers hit any wizard next turn
-        if self.bludgers().iter().any(|b| {
-            b.future().collider.collides(&wiz1.collider) ||
-                b.future().collider.collides(&wiz2.collider)
-        }) {
+        //Target is close to goal, shoot at goal
+        if self.target_goal.destination_is_close(target, 2000.) {
             self.optimal_throw_location(target).add(target.collider.vel.negate())
-            //Target is close to goal, shoot at goal
-        } else if self.target_goal.destination_is_close(target, 2000.) {
-            self.optimal_throw_location(target).add(target.collider.vel.negate())
-            //Target is closer to wiz1 than wiz1 && wiz1 is closer to goal => pass to wiz1
-        } else if wiz1_dist < wiz2_dist && wiz1_is_ahead {
+        } //Target is close to own goal
+        else if self.own_goal.destination_is_close(target, 2000.) {
+            self.magic_destination_from_own_goal(target)
+        }
+        //Target is closer to wiz1 than wiz1 && wiz1 is closer to goal => pass to wiz1
+        else if wiz1_dist < wiz2_dist && wiz1_is_ahead {
             wiz1.collider.pos.add(target.collider.vel.negate())
             //Second wizard is closer to target && closer to goal than target
         } else if wiz2_dist < wiz1_dist && wiz2_is_ahead {
@@ -475,8 +473,48 @@ impl State {
             self.optimal_throw_location(target).add(target.collider.vel.negate())
         }
     }
+    fn magic_destination_from_own_goal(&self, target: &Entity) -> Vector2 {
+        let future_pos = target.collider.destination_turns(2);
+        // From top to bottom
+        let vertical_points_ahead = self.in_between_points(
+            &Vector2::new(target.collider.pos.x + 1000., 0.0),
+            &Vector2::new(target.collider.pos.x + 1000., 16000.0),
+            20,
+        );
+        let obstacles = self.obstacles();
+        //Filter vertical points to only those that don't have obstacles between target & point
+        let possible_destinations = vertical_points_ahead.iter().filter(|p| {
+            //Filter vertical positions with direct line of sight to target
+            self.in_between_colliders(&target.collider.pos, p, 20).iter().any(|c| {
+                obstacles.iter().any(|o| o.collider.collides(c))
+            })
+        }).cloned().collect::<Vec<Vector2>>();
+        // Return best destination closest to one of our wizards
+        possible_destinations.iter().map(|p| {
+            let wiz_positions: Vec<Vector2> =
+                self.wizards().iter()
+                    .map(|w| w.collider.destination_turns(2).clone())
+                    .collect();
+            //min of distance from two wizards
+            wiz_positions.iter().min_by(|a, b|
+                (a.distance(p.clone()) as i32).cmp(&(b.distance(p.clone()) as i32))
+            ).unwrap().clone()
+            //Then min of those distances from target
+        }).min_by(|&a, &b| {
+            (a.distance(target.collider.pos) as i32)
+                .cmp(&(b.distance(target.collider.pos) as i32))
+        }).unwrap().clone()
+    }
     fn magic_power(&self, target: &Entity, dest: &Vector2, magic_left: i32) -> i32 {
-        magic_left
+        let magic_needed = target.collider.destination_turns(2)
+                                 .add(target.collider.velocity_turns(2).negate())
+                                 .distance(dest.clone()) *
+            target.collider.friction / target.collider.mass;
+        if magic_needed as i32 >= magic_left {
+            magic_left
+        } else {
+            magic_needed as i32
+        }
     }
     fn move_destination(&mut self, wizard: &Entity) -> Vector2 {
         if wizard.target.is_some() {
@@ -556,6 +594,11 @@ impl State {
     fn opponents(&self) -> Vec<Entity> { self.entities_of_type(EntityType::Opponent) }
     fn bludgers(&self) -> Vec<Entity> { self.entities_of_type(EntityType::Bludger) }
     fn snaffles(&self) -> Vec<Entity> { self.entities_of_type(EntityType::Snaffle) }
+    fn obstacles(&self) -> Vec<Entity> {
+        self.entities.iter()
+            .filter(|e| e.entity_type != EntityType::Wizard)
+            .map(|e| e.future_turns(2).clone()).collect()
+    }
     fn closest_snaffle(&self, pos: Vector2) -> Option<Entity> {
         let snaffles = self.snaffles();
         if snaffles.len() == 0 { None } else {
@@ -567,38 +610,15 @@ impl State {
         }
     }
     pub fn optimal_throw_location(&self, thrower: &Entity) -> Vector2 {
-        let obstacle_futures: Vec<Entity> = self.entities.iter()
-                                                .filter(|e| e.entity_type != EntityType::Wizard)
-                                                .map(|e| e.future_turns(2).clone())
-                                                .collect();
+        let obstacle_futures: Vec<Entity> =
+            self.obstacles().iter().map(|e| e.future_turns(2).clone()).collect();
         let points_in_goal: Vec<Vector2> = self.target_goal.points_inside_goal(10);
         let optimal_points: Vec<Vector2> = points_in_goal.iter().filter(|&goal_p| {
-            let mut snaffles_in_between = vec![];
-            let div = 20.0;
-            let dist = thrower.collider.pos.distance(goal_p.clone());
-            let position = Vector2::new(
-                thrower.collider.pos.x,
-                thrower.collider.pos.y,
-            );
-            for i in 0..(div as i32) {
-                let direction = position.direction(goal_p.clone());
-                let new_pos = position.add(
-                    Vector2::new(
-                        direction.x * i as f32 * dist / div,
-                        direction.y * i as f32 * dist / div,
-                    )
-                );
-                snaffles_in_between.push(Entity::new(99,
-                                                     EntityType::Snaffle,
-                                                     Collider::new(
-                                                         new_pos,
-                                                         Vector2::new(0., 0.), 0.75, 0.5, 150.,
-                                                     ), false));
-            }
+            let colliders_in_between = self.in_between_colliders(&thrower.collider.pos, goal_p, 20);
             // If any point in between is inside any obstacle
             obstacle_futures.iter().any(|o| {
-                snaffles_in_between.iter().any(|s| {
-                    s.collider.collides(&o.collider)
+                colliders_in_between.iter().any(|c| {
+                    c.collides(&o.collider)
                 })
             })
         }).cloned().collect();
@@ -609,6 +629,36 @@ impl State {
         } else {
             optimal_points[optimal_points.len() / 2]
         }
+    }
+
+    fn in_between_points(&self, start: &Vector2, end: &Vector2, num: i32) -> Vec<Vector2> {
+        let mut points_int_between = vec![];
+        let div = num as f32;
+        let dist = start.distance(end.clone());
+        let position = Vector2::new(
+            start.x,
+            start.y,
+        );
+        for i in 0..num {
+            let direction = position.direction(end.clone());
+            let new_pos = position.add(
+                Vector2::new(
+                    direction.x * i as f32 * dist / div,
+                    direction.y * i as f32 * dist / div,
+                )
+            );
+            points_int_between.push(new_pos);
+        }
+        points_int_between
+    }
+
+    fn in_between_colliders(&self, start: &Vector2, end: &Vector2, num: i32) -> Vec<Collider> {
+        self.in_between_points(start, end, num).iter().map(|p| {
+            Collider::new(
+                p.clone(),
+                Vector2::new(0., 0.), 0.75, 0.5, 150.,
+            )
+        }).collect()
     }
 }
 
