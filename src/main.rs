@@ -296,13 +296,16 @@ impl State {
             for _ in 0..entities as usize {
                 let (entity_id, entity_type, x, y, vx, vy, has_snaffle) = parse_entity_variables();
                 match &entity_type[..] {
-                    "SNAFFLE" => existing_snaffles.push(
-                        Entity::new(entity_id,
-                                    EntityType::Snaffle,
-                                    Collider::new(
-                                        Vector2::new(x as f32, y as f32),
-                                        Vector2::new(vx as f32, vy as f32), 0.75, 0.5, 150.),
-                                    has_snaffle)),
+                    "SNAFFLE" => {
+                        existing_snaffles.push(
+                            Entity::new(entity_id,
+                                        EntityType::Snaffle,
+                                        Collider::new(
+                                            Vector2::new(x as f32, y as f32),
+                                            Vector2::new(vx as f32, vy as f32), 0.75, 0.5, 150.),
+                                        has_snaffle));
+                        self.entities.iter_mut().find(|e| e.id == entity_id).unwrap().update(x, y, vx, vy, has_snaffle);
+                    }
                     _ => self.entities.iter_mut().find(|e| e.id == entity_id).unwrap().update(x, y, vx, vy, has_snaffle)
                 }
             }
@@ -311,18 +314,21 @@ impl State {
                                              e.entity_type == EntityType::Snaffle &&
                                                  existing_snaffles.iter().all(|s| s.id != e.id)
                                          }).map(|e| e.id).collect::<Vec<i32>>();
+            eprintln!("entities to remove {:?}", entities_to_remove);
             let new_entities = self.entities.iter()
                                    .filter(|e1| {
                                        entities_to_remove.iter().all(|&id| e1.id != id)
                                    }).cloned().collect::<Vec<Entity>>();
+            eprintln!("new entities {:?}", new_entities.iter().map(|e| e.id).collect::<Vec<i32>>());
             self.entities = new_entities;
         }
         self.set_targets();
+        eprintln!("{:?}", self.wizards());
     }
     pub fn act_turn(&mut self) {
         let mut magic_left = self.magic;
         for wizard in &self.wizards() {
-            match self.optimal_action(&wizard, magic_left) {
+            match self.optimal_action(&wizard, &magic_left) {
                 ActionType::Throw => {
                     let dest: Vector2 = self.throw_destination(wizard);
                     self.throw_action(
@@ -351,24 +357,24 @@ impl State {
             }
         }
     }
-    fn optimal_action(&self, wizard: &Entity, magic_left: i32) -> ActionType {
+    fn optimal_action(&self, wizard: &Entity, magic_left: &i32) -> ActionType {
         if wizard.has_snaffle {
             ActionType::Throw
-        } else if self.should_magic(wizard, magic_left) {
+        } else if self.should_magic(magic_left) {
             ActionType::Magic
         } else {
             ActionType::Move
         }
     }
-    fn should_magic(&self, wizard: &Entity, magic_left: i32) -> bool {
+    fn should_magic(&self, magic_left: &i32) -> bool {
         let close_to_limit = 1500.0;
         // Close to target or own goal
-        if magic_left > 15 && self.snaffles().iter().any(|s|
+        if *magic_left > 15 && self.snaffles().iter().any(|s|
             self.target_goal.destination_is_close(s, close_to_limit)) ||
             self.snaffles().iter().any(|s|
                 self.own_goal.destination_is_close(s, close_to_limit)) {
             true
-        } else if magic_left > MAX_MAGIC / 2 {
+        } else if *magic_left > MAX_MAGIC / 2 {
             true
         } else {
             false
@@ -457,20 +463,17 @@ impl State {
         }
     }
     fn magic_power(&self, target: &Entity, dest: &Vector2, magic_left: i32) -> i32 {
-        let magic_needed = (target.collider.destination()
-                                  .distance(dest.clone()) *
-            target.collider.friction / target.collider.mass) / 15.;
-        if magic_needed as i32 >= magic_left {
-            magic_left
-        } else {
-            magic_needed as i32
-        }
+        magic_left
     }
     fn move_destination(&mut self, wizard: &Entity) -> Vector2 {
         if wizard.target.is_some() {
             let target_id = wizard.target.unwrap();
-            self.entities.iter().find(|e| e.id == target_id)
-                .cloned().unwrap().collider.pos
+            let target = self.entities.iter().find(|e| e.id == target_id)
+                             .cloned().unwrap();
+            let destination = target.collider.destination();
+            eprintln!("target: {:?}", target);
+            eprintln!("destination {:?}", destination);
+            destination
         } else {
             Vector2::new(WIDTH as f32 / 2., HEIGHT as f32 / 2.)
         }
@@ -486,7 +489,8 @@ impl State {
     }
 
     fn set_targets(&mut self) {
-        let mut snaffles = self.snaffles();
+        let snaffles = self.snaffles();
+        let clone = self.clone();
         //Mutable reference to entities (Wizards)
         let mut wizards: Vec<&mut Entity> = self.entities.iter_mut()
                                                 .filter(|e| e.entity_type == EntityType::Wizard)
@@ -494,47 +498,44 @@ impl State {
         //Reset targets
         wizards[0].set_target(None);
         wizards[1].set_target(None);
-        //No snaffles, stop
-        if snaffles.len() == 0 {
-            return;
+        let pos1 = wizards[0].collider.pos;
+        let pos2 = wizards[1].collider.pos;
+        let closest_to_w1 = clone.closest_snaffle(pos1);
+        let closest_to_w2 = clone.closest_snaffle(pos2);
+        if snaffles.len() >= 1 {
+            let closest1 = closest_to_w1.unwrap();
+            let closest2 = closest_to_w2.unwrap();
+            if snaffles.len() == 1 {
+                //Same target
+                wizards[0].set_target(Some(closest1.id));
+                wizards[1].set_target(Some(closest1.id));
+            } else if snaffles.len() > 1 {
+                if closest1.id == closest2.id {
+                    //Since closest to both is the same, choose wizard that's closer
+                    if closest1.collider.pos.distance(wizards[0].collider.pos) <
+                        closest1.collider.pos.distance(wizards[1].collider.pos) {
+                        wizards[0].set_target(Some(closest1.id));
+                    } else {
+                        wizards[1].set_target(Some(closest1.id));
+                    }
+                } else {
+                    wizards[0].set_target(Some(closest1.id));
+                    wizards[1].set_target(Some(closest2.id));
+                }
+            }
         }
-        // Sort snaffles closest to wiz1
-        snaffles.sort_by(|a, b| {
-            (a.collider.pos.distance(wizards[0].collider.pos) as i32).cmp(
-                &(b.collider.pos.distance(wizards[0].collider.pos) as i32)
-            )
-        });
-        wizards[0].set_target(Some(snaffles.first().unwrap().id));
-        //If just one snaffle, target same
-        if snaffles.len() == 0 {
-            wizards[1].set_target(Some(snaffles.first().unwrap().id));
-            return;
-        }
-        // Remove wiz1's target
-        snaffles.remove(
-            snaffles.iter().position(|s| {
-                s.id == wizards[0].target.unwrap()
-            }).unwrap()
-        );
-        // Sort snaffles closest to wiz2
-        snaffles.sort_by(|a, b| {
-            (a.collider.pos.distance(wizards[1].collider.pos) as i32).cmp(
-                &(b.collider.pos.distance(wizards[1].collider.pos) as i32)
-            )
-        });
-        wizards[1].set_target(Some(snaffles.first().unwrap().id));
     }
     fn other_wizard(&self, wizard: &Entity) -> Entity {
         self.wizards().iter().find(|e| e.id != wizard.id).cloned().unwrap()
     }
     fn move_action(&self, dest: &Vector2, thrust: i32) {
-        println!("{} {} {} {}", "MOVE", dest.x as i32, dest.y as i32, thrust)
+        println!("{} {} {} {} MOVING", "MOVE", dest.x as i32, dest.y as i32, thrust)
     }
     fn throw_action(&self, dest: &Vector2, power: i32) {
-        println!("{} {} {} {}", "THROW", dest.x as i32, dest.y as i32, power)
+        println!("{} {} {} {} THROWING", "THROW", dest.x as i32, dest.y as i32, power)
     }
     fn magic_action(&mut self, target_id: i32, dest: &Vector2, magic_power: i32) {
-        println!("{} {} {} {} {}", "WINGARDIUM", target_id, dest.x as i32, dest.y as i32, magic_power)
+        println!("{} {} {} {} {} DOING SPELLS LOL", "WINGARDIUM", target_id, dest.x as i32, dest.y as i32, magic_power)
     }
     fn entities_of_type(&self, entity_type: EntityType) -> Vec<Entity> {
         self.entities.iter()
@@ -544,6 +545,16 @@ impl State {
     fn opponents(&self) -> Vec<Entity> { self.entities_of_type(EntityType::Opponent) }
     fn bludgers(&self) -> Vec<Entity> { self.entities_of_type(EntityType::Bludger) }
     fn snaffles(&self) -> Vec<Entity> { self.entities_of_type(EntityType::Snaffle) }
+    fn closest_snaffle(&self, pos: Vector2) -> Option<Entity> {
+        let snaffles = self.snaffles();
+        if snaffles.len() == 0 { None } else {
+            snaffles.iter().min_by(|a, b| {
+                (a.collider.pos.distance(pos) as i32).cmp(
+                    &(b.collider.pos.distance(pos) as i32)
+                )
+            }).cloned()
+        }
+    }
 }
 
 fn main() {
