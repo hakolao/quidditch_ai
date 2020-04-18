@@ -75,7 +75,11 @@ impl Vector2 {
         Vector2::new(self.x + v2.x, self.y + v2.y)
     }
     pub fn heading(&self, target: Vector2) -> Vector2 { Vector2::new(target.x - self.x, target.y - self.y) }
-    pub fn direction(&self, target: Vector2) -> Vector2 { self.heading(target) / self.distance(target) }
+    pub fn direction(&self, target: Vector2) -> Vector2 {
+        let heading = self.heading(target);
+        let dist = self.distance(target);
+        Vector2::new(heading.x / dist, heading.y / dist)
+    }
     pub fn mul_num(&self, num: f32) -> Vector2 {
         Vector2::new(self.x * num, self.y * num)
     }
@@ -189,7 +193,7 @@ impl Goal {
         }
     }
     pub fn destination_is_close(&self, entity: &Entity, close_to_limit: f32) -> bool {
-        self.points_inside_goal().any(|point| {
+        self.points_inside_goal().iter().any(|&point| {
             let dist_from_point = entity.collider.destination().distance(point);
             dist_from_point < close_to_limit
         })
@@ -199,8 +203,8 @@ impl Goal {
         let mut points = vec![];
         for i in 0..(div as i32) {
             points.push(Vector2::new(
-                self.pole_bottom.x,
-                self.pole_top.y + i as f32 * (4000.0 / div),
+                self.pole_bottom.pos.x,
+                self.pole_top.pos.y + i as f32 * (4000.0 / div),
             ))
         }
         points
@@ -329,7 +333,7 @@ impl State {
                 ActionType::Magic => {
                     let target: Entity = self.magic_target();
                     let dest: Vector2 = self.magic_destination(&target);
-                    let magic_power = self.magic_power(&target.pos, &dest, magic_left);
+                    let magic_power = self.magic_power(&target, &dest, magic_left);
                     self.magic_action(
                         target.id,
                         &dest,
@@ -341,7 +345,7 @@ impl State {
                     let dest: Vector2 = self.move_destination(wizard);
                     self.move_action(
                         &dest,
-                        self.move_thrust(wizard, &dest),
+                        self.thrust_power(wizard, &dest),
                     )
                 }
             }
@@ -393,7 +397,7 @@ impl State {
         if power_needed as i32 >= MAX_POWER {
             MAX_POWER
         } else {
-            power_needed
+            power_needed as i32
         }
     }
     fn magic_target(&self) -> Entity {
@@ -453,21 +457,23 @@ impl State {
         }
     }
     fn magic_power(&self, target: &Entity, dest: &Vector2, magic_left: i32) -> i32 {
-        let magic_needed = (target.destination()
+        let magic_needed = (target.collider.destination()
                                   .distance(dest.clone()) *
             target.collider.friction / target.collider.mass) / 15.;
         if magic_needed as i32 >= magic_left {
             magic_left
         } else {
-            magic_needed
+            magic_needed as i32
         }
     }
     fn move_destination(&mut self, wizard: &Entity) -> Vector2 {
         if wizard.target.is_some() {
             let target_id = wizard.target.unwrap();
-            self.entities.iter().find(|e| e.id == target_id).cloned().unwrap()
+            self.entities.iter().find(|e| e.id == target_id)
+                .cloned().unwrap().collider.pos
+        } else {
+            Vector2::new(WIDTH as f32 / 2., HEIGHT as f32 / 2.)
         }
-        Vector2::new(WIDTH as f32 / 2., HEIGHT as f32 / 2.)
     }
     fn thrust_power(&self, wizard: &Entity, dest: &Vector2) -> i32 {
         let thrust_needed = wizard.collider.pos.distance(dest.clone()) *
@@ -475,49 +481,48 @@ impl State {
         if thrust_needed as i32 >= MAX_THRUST {
             MAX_THRUST
         } else {
-            thrust_needed
+            thrust_needed as i32
         }
     }
 
     fn set_targets(&mut self) {
-        //Mutable reference to entities (Wizards)
-        let wizards = self.entities.iter_mut()
-                          .find(|e| e.entity_type == EntityType::Wizard).unwrap();
-        let wiz1: &mut Entity = wizards[0];
-        let wiz2: &mut Entity = wizards[1];
-        //Reset targets
-        wiz1.set_target(None);
-        wiz2.set_target(None);
         let mut snaffles = self.snaffles();
+        //Mutable reference to entities (Wizards)
+        let mut wizards: Vec<&mut Entity> = self.entities.iter_mut()
+                                                .filter(|e| e.entity_type == EntityType::Wizard)
+                                                .collect();
+        //Reset targets
+        wizards[0].set_target(None);
+        wizards[1].set_target(None);
         //No snaffles, stop
         if snaffles.len() == 0 {
             return;
         }
         // Sort snaffles closest to wiz1
         snaffles.sort_by(|a, b| {
-            (a.collider.pos.distance(wiz1.collider.pos) as i32).cmp(
-                &(b.collider.pos.distance(wiz1.collider.pos) as i32)
+            (a.collider.pos.distance(wizards[0].collider.pos) as i32).cmp(
+                &(b.collider.pos.distance(wizards[0].collider.pos) as i32)
             )
         });
-        wiz1.set_target(Some(snaffles.first().unwrap().id));
+        wizards[0].set_target(Some(snaffles.first().unwrap().id));
         //If just one snaffle, target same
         if snaffles.len() == 0 {
-            wiz2.set_target(Some(snaffles.first().unwrap().id))
+            wizards[1].set_target(Some(snaffles.first().unwrap().id));
             return;
         }
         // Remove wiz1's target
         snaffles.remove(
-            self.snaffles().iter().position(|s| {
-                s.id == wiz1.target.unwrap()
+            snaffles.iter().position(|s| {
+                s.id == wizards[0].target.unwrap()
             }).unwrap()
         );
         // Sort snaffles closest to wiz2
         snaffles.sort_by(|a, b| {
-            (a.collider.pos.distance(wiz2.collider.pos) as i32).cmp(
-                &(b.collider.pos.distance(wiz2.collider.pos) as i32)
+            (a.collider.pos.distance(wizards[1].collider.pos) as i32).cmp(
+                &(b.collider.pos.distance(wizards[1].collider.pos) as i32)
             )
         });
-        wiz2.set_target(Some(snaffles.first().unwrap().id));
+        wizards[1].set_target(Some(snaffles.first().unwrap().id));
     }
     fn other_wizard(&self, wizard: &Entity) -> Entity {
         self.wizards().iter().find(|e| e.id != wizard.id).cloned().unwrap()
