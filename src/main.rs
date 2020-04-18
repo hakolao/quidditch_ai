@@ -314,16 +314,13 @@ impl State {
                                              e.entity_type == EntityType::Snaffle &&
                                                  existing_snaffles.iter().all(|s| s.id != e.id)
                                          }).map(|e| e.id).collect::<Vec<i32>>();
-            eprintln!("entities to remove {:?}", entities_to_remove);
             let new_entities = self.entities.iter()
                                    .filter(|e1| {
                                        entities_to_remove.iter().all(|&id| e1.id != id)
                                    }).cloned().collect::<Vec<Entity>>();
-            eprintln!("new entities {:?}", new_entities.iter().map(|e| e.id).collect::<Vec<i32>>());
             self.entities = new_entities;
         }
         self.set_targets();
-        eprintln!("{:?}", self.wizards());
     }
     pub fn act_turn(&mut self) {
         let mut magic_left = self.magic;
@@ -369,10 +366,11 @@ impl State {
     fn should_magic(&self, magic_left: &i32) -> bool {
         let close_to_limit = 1500.0;
         // Close to target or own goal
-        if *magic_left > 15 && self.snaffles().iter().any(|s|
-            self.target_goal.destination_is_close(s, close_to_limit)) ||
-            self.snaffles().iter().any(|s|
-                self.own_goal.destination_is_close(s, close_to_limit)) {
+        if *magic_left > 15 &&
+            (self.snaffles().iter().any(|s|
+                self.target_goal.destination_is_close(s, close_to_limit)) ||
+                self.snaffles().iter().any(|s|
+                    self.own_goal.destination_is_close(s, close_to_limit))) {
             true
         } else if *magic_left > MAX_MAGIC / 2 {
             true
@@ -471,8 +469,6 @@ impl State {
             let target = self.entities.iter().find(|e| e.id == target_id)
                              .cloned().unwrap();
             let destination = target.collider.destination();
-            eprintln!("target: {:?}", target);
-            eprintln!("destination {:?}", destination);
             destination
         } else {
             Vector2::new(WIDTH as f32 / 2., HEIGHT as f32 / 2.)
