@@ -74,6 +74,9 @@ impl Vector2 {
     pub fn add(&self, v2: Vector2) -> Vector2 {
         Vector2::new(self.x + v2.x, self.y + v2.y)
     }
+    pub fn negate(&self) -> Vector2 {
+        Vector2::new(-self.x, -self.y)
+    }
     pub fn heading(&self, target: Vector2) -> Vector2 { Vector2::new(target.x - self.x, target.y - self.y) }
     pub fn direction(&self, target: Vector2) -> Vector2 {
         let heading = self.heading(target);
@@ -419,12 +422,7 @@ impl State {
         }
     }
     fn throw_power(&self, wizard: &Entity, dest: &Vector2) -> i32 {
-        let power_needed = wizard.collider.pos.distance(dest.clone()) * 0.75 / 0.5;
-        if power_needed as i32 >= MAX_POWER {
-            MAX_POWER
-        } else {
-            power_needed as i32
-        }
+        MAX_POWER
     }
     fn magic_target(&self) -> Entity {
         // Since should magic is about "close to target or own goal", let's find closest to either
@@ -438,13 +436,8 @@ impl State {
                 &(b.collider.destination_turns(2).distance(self.target_goal.center()) as i32)
             )
         });
-        let closest_to_target = snaffles.first().cloned().unwrap();
-        snaffles.sort_by(|a, b| {
-            (a.collider.destination_turns(2).distance(self.own_goal.center()) as i32).cmp(
-                &(b.collider.destination_turns(2).distance(self.own_goal.center()) as i32)
-            )
-        });
-        let closest_to_own_goal = snaffles.first().cloned().unwrap();
+        let closest_to_target = self.closest_snaffle(self.target_goal.center()).unwrap();
+        let closest_to_own_goal = self.closest_snaffle(self.own_goal.center()).unwrap();
         if closest_to_target.collider.pos.distance(self.target_goal.center()) <
             closest_to_own_goal.collider.pos.distance(self.own_goal.center()) {
             closest_to_target
@@ -468,18 +461,18 @@ impl State {
             b.future().collider.collides(&wiz1.collider) ||
                 b.future().collider.collides(&wiz2.collider)
         }) {
-            self.optimal_throw_location(target)
+            self.optimal_throw_location(target).add(target.collider.vel.negate())
             //Target is close to goal, shoot at goal
         } else if self.target_goal.destination_is_close(target, 2000.) {
-            self.optimal_throw_location(target)
+            self.optimal_throw_location(target).add(target.collider.vel.negate())
             //Target is closer to wiz1 than wiz1 && wiz1 is closer to goal => pass to wiz1
         } else if wiz1_dist < wiz2_dist && wiz1_is_ahead {
-            wiz1.collider.pos
+            wiz1.collider.pos.add(target.collider.vel.negate())
             //Second wizard is closer to target && closer to goal than target
         } else if wiz2_dist < wiz1_dist && wiz2_is_ahead {
-            wiz2.collider.pos
+            wiz2.collider.pos.add(target.collider.vel.negate())
         } else {
-            self.optimal_throw_location(target)
+            self.optimal_throw_location(target).add(target.collider.vel.negate())
         }
     }
     fn magic_power(&self, target: &Entity, dest: &Vector2, magic_left: i32) -> i32 {
@@ -567,8 +560,8 @@ impl State {
         let snaffles = self.snaffles();
         if snaffles.len() == 0 { None } else {
             snaffles.iter().min_by(|a, b| {
-                (a.collider.pos.distance(pos) as i32).cmp(
-                    &(b.collider.pos.distance(pos) as i32)
+                (a.collider.destination_turns(2).distance(pos) as i32).cmp(
+                    &(b.collider.destination_turns(2).distance(pos) as i32)
                 )
             }).cloned()
         }
