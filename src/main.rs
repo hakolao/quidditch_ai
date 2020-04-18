@@ -666,7 +666,10 @@ impl State {
             self.target_goal.random_inside_goal()
             //Optimal points, choose one of them randomly
         } else {
-            optimal_points[optimal_points.len() / 2]
+            optimal_points.iter().min_by(|a, b| {
+                (a.distance(thrower.collider.pos) as i32).cmp(
+                    &(b.distance(thrower.collider.pos) as i32))
+            }).cloned().unwrap()
         }
     }
 
