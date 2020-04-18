@@ -1,5 +1,6 @@
 use std::io;
 use rand::{thread_rng, Rng};
+use std::borrow::{Borrow, BorrowMut};
 
 macro_rules! parse_input {
     ($x:expr, $t:ident) => ($x.trim().parse::<$t>().unwrap())
@@ -218,7 +219,7 @@ impl Goal {
     }
     pub fn destination_is_close(&self, entity: &Entity, close_to_limit: f32) -> bool {
         self.points_inside_goal(10).iter().any(|&point| {
-            let dist_from_point = entity.collider.destination_turns(2).distance(point);
+            let dist_from_point = entity.collider.destination().distance(point);
             dist_from_point < close_to_limit
         })
     }
@@ -253,6 +254,13 @@ enum ActionType {
     Throw,
     Move,
     Magic,
+}
+
+enum TargetStrategy {
+    ClosestToWizard,
+    ClosestToOpponent,
+    ClosestToTargetGoal,
+    ClosestToOwnGoal,
 }
 
 #[derive(Debug, Clone, PartialOrd, PartialEq)]
@@ -404,21 +412,16 @@ impl State {
         }
     }
     fn throw_destination(&self, wizard: &Entity) -> Vector2 {
-        let other_wizard_dest = self.other_wizard(wizard).collider.destination_turns(2);
-        //Bludgers hit other wizard next turn
-        if self.bludgers().iter().any(|b| b.future().collider.collides(
-            &self.other_wizard(wizard).future().collider
-        )) {
-            self.optimal_throw_location(wizard)
-            //other wizard is close && its destination distance from goal is closer
-            //than self => pass to other wizard
-            //ToDo check that nothing is in between
-        } else if other_wizard_dest.distance(wizard.collider.pos) < 1500. &&
+        let other_wizard_dest = self.other_wizard(wizard).collider.destination();
+        if other_wizard_dest.distance(wizard.collider.pos) < 1500. &&
             other_wizard_dest.distance(self.target_goal.center()) <
-                wizard.collider.pos.distance(self.target_goal.center()) {
+                wizard.collider.pos.distance(self.target_goal.center()) &&
+            self.is_obstacles_in_between(&wizard.collider.pos, &other_wizard_dest) {
             other_wizard_dest
+        } else if wizard.collider.pos.distance(self.target_goal.center()) > WIDTH as f32 / 2. {
+            self.open_destination_ahead(wizard)
         } else {
-            self.optimal_throw_location(wizard)
+            self.optimal_goal_location(wizard)
         }
     }
     fn throw_power(&self, wizard: &Entity, dest: &Vector2) -> i32 {
@@ -432,8 +435,8 @@ impl State {
             return self.opponents().first().cloned().unwrap();
         }
         snaffles.sort_by(|a, b| {
-            (a.collider.destination_turns(2).distance(self.target_goal.center()) as i32).cmp(
-                &(b.collider.destination_turns(2).distance(self.target_goal.center()) as i32)
+            (a.collider.destination().distance(self.target_goal.center()) as i32).cmp(
+                &(b.collider.destination().distance(self.target_goal.center()) as i32)
             )
         });
         let closest_to_target = self.closest_snaffle(self.target_goal.center()).unwrap();
@@ -458,55 +461,47 @@ impl State {
         let wiz2_dist = wiz2.collider.pos.distance(target.collider.pos);
         //Target is close to goal, shoot at goal
         if self.target_goal.destination_is_close(target, 2000.) {
-            self.optimal_throw_location(target).add(target.collider.vel.negate())
-        } //Target is close to own goal
-        else if self.own_goal.destination_is_close(target, 2000.) {
-            self.magic_destination_from_own_goal(target)
+            self.optimal_goal_location(target).add(target.collider.vel.negate())
         }
         //Target is closer to wiz1 than wiz1 && wiz1 is closer to goal => pass to wiz1
-        else if wiz1_dist < wiz2_dist && wiz1_is_ahead {
+        else if !self.is_obstacles_in_between(&target.collider.pos, &wiz1.collider.pos) &&
+            wiz1_dist < wiz2_dist && wiz1_is_ahead {
             wiz1.collider.pos.add(target.collider.vel.negate())
             //Second wizard is closer to target && closer to goal than target
-        } else if wiz2_dist < wiz1_dist && wiz2_is_ahead {
+        } else if !self.is_obstacles_in_between(&target.collider.pos, &wiz2.collider.pos) &&
+            wiz2_dist < wiz1_dist && wiz2_is_ahead {
             wiz2.collider.pos.add(target.collider.vel.negate())
         } else {
-            self.optimal_throw_location(target).add(target.collider.vel.negate())
+            self.open_destination_ahead(target)
         }
     }
-    fn magic_destination_from_own_goal(&self, target: &Entity) -> Vector2 {
-        let future_pos = target.collider.destination_turns(2);
+    fn open_destination_ahead(&self, target: &Entity) -> Vector2 {
+        let future_pos = target.collider.destination();
         // From top to bottom
+        let multiplier = if self.team_id == 0 {
+            1
+        } else { -1 } as f32;
         let vertical_points_ahead = self.in_between_points(
-            &Vector2::new(target.collider.pos.x + 1000., 0.0),
-            &Vector2::new(target.collider.pos.x + 1000., 16000.0),
+            &Vector2::new(future_pos.x + multiplier * 2000., 0.0),
+            &Vector2::new(future_pos.x + multiplier * 2000., 16000.0),
             20,
         );
         let obstacles = self.obstacles();
         //Filter vertical points to only those that don't have obstacles between target & point
         let possible_destinations = vertical_points_ahead.iter().filter(|p| {
             //Filter vertical positions with direct line of sight to target
-            self.in_between_colliders(&target.collider.pos, p, 20).iter().any(|c| {
+            self.in_between_colliders(&future_pos, p, 20).iter().any(|c| {
                 obstacles.iter().any(|o| o.collider.collides(c))
             })
         }).cloned().collect::<Vec<Vector2>>();
-        // Return best destination closest to one of our wizards
-        possible_destinations.iter().map(|p| {
-            let wiz_positions: Vec<Vector2> =
-                self.wizards().iter()
-                    .map(|w| w.collider.destination_turns(2).clone())
-                    .collect();
-            //min of distance from two wizards
-            wiz_positions.iter().min_by(|a, b|
-                (a.distance(p.clone()) as i32).cmp(&(b.distance(p.clone()) as i32))
-            ).unwrap().clone()
-            //Then min of those distances from target
-        }).min_by(|&a, &b| {
-            (a.distance(target.collider.pos) as i32)
-                .cmp(&(b.distance(target.collider.pos) as i32))
+        eprintln!("{:?}", possible_destinations);
+        possible_destinations.iter().min_by(|&a, &b| {
+            (a.distance(future_pos) as i32)
+                .cmp(&(b.distance(future_pos) as i32))
         }).unwrap().clone()
     }
     fn magic_power(&self, target: &Entity, dest: &Vector2, magic_left: i32) -> i32 {
-        let magic_needed = target.collider.destination_turns(2)
+        let magic_needed = target.collider.destination()
                                  .add(target.collider.velocity_turns(2).negate())
                                  .distance(dest.clone()) *
             target.collider.friction / target.collider.mass;
@@ -521,7 +516,7 @@ impl State {
             let target_id = wizard.target.unwrap();
             let target = self.entities.iter().find(|e| e.id == target_id)
                              .cloned().unwrap();
-            let destination = target.collider.destination_turns(2);
+            let destination = target.collider.destination();
             destination
         } else {
             Vector2::new(WIDTH as f32 / 2., HEIGHT as f32 / 2.)
@@ -539,7 +534,8 @@ impl State {
 
     fn set_targets(&mut self) {
         let snaffles = self.snaffles();
-        let clone = self.clone();
+        let clone_state = self.clone();
+        let target_strategy = self.target_strategy();
         //Mutable reference to entities (Wizards)
         let mut wizards: Vec<&mut Entity> = self.entities.iter_mut()
                                                 .filter(|e| e.entity_type == EntityType::Wizard)
@@ -547,32 +543,59 @@ impl State {
         //Reset targets
         wizards[0].set_target(None);
         wizards[1].set_target(None);
-        let pos1 = wizards[0].collider.pos;
-        let pos2 = wizards[1].collider.pos;
-        let closest_to_w1 = clone.closest_snaffle(pos1);
-        let closest_to_w2 = clone.closest_snaffle(pos2);
-        if snaffles.len() >= 1 {
-            let closest1 = closest_to_w1.unwrap();
-            let closest2 = closest_to_w2.unwrap();
-            if snaffles.len() == 1 {
-                //Same target
-                wizards[0].set_target(Some(closest1.id));
-                wizards[1].set_target(Some(closest1.id));
-            } else if snaffles.len() > 1 {
-                if closest1.id == closest2.id {
-                    //Since closest to both is the same, choose wizard that's closer
-                    if closest1.collider.pos.distance(wizards[0].collider.pos) <
-                        closest1.collider.pos.distance(wizards[1].collider.pos) {
-                        wizards[0].set_target(Some(closest1.id));
-                    } else {
-                        wizards[1].set_target(Some(closest1.id));
-                    }
+        if snaffles.len() == 0 { return; }
+        let mut closest1 = None;
+        let mut closest2 = None;
+        match target_strategy {
+            TargetStrategy::ClosestToWizard => {
+                let pos1 = wizards[0].collider.pos;
+                let pos2 = wizards[1].collider.pos;
+                closest1 = clone_state.closest_snaffle(pos1);
+                closest2 = clone_state.closest_snaffle(pos2);
+            }
+            TargetStrategy::ClosestToOpponent => {
+                let ops = clone_state.opponents();
+                closest1 = clone_state.closest_snaffle(ops[0].collider.pos);
+                closest2 = clone_state.closest_snaffle(ops[1].collider.pos);
+            }
+            TargetStrategy::ClosestToTargetGoal => {
+                let closest_to_goal = clone_state.closest_snaffles(clone_state.target_goal.center());
+                closest1 = closest_to_goal.first().cloned();
+                closest2 = if closest_to_goal.len() > 1 {
+                    Some(closest_to_goal[1].clone())
+                } else { closest1.clone() };
+            }
+            TargetStrategy::ClosestToOwnGoal => {
+                let closest_to_goal = clone_state.closest_snaffles(clone_state.own_goal.center());
+                closest1 = closest_to_goal.first().cloned();
+                closest2 = if closest_to_goal.len() > 1 {
+                    Some(closest_to_goal[1].clone())
+                } else { closest1.clone() };
+            }
+        };
+        let e1 = closest1.unwrap();
+        let e2 = closest2.unwrap();
+        if snaffles.len() == 1 {
+            //Same target
+            wizards[0].set_target(Some(e1.id));
+            wizards[1].set_target(Some(e1.id));
+        } else if snaffles.len() > 1 {
+            if e1.id == e2.id {
+                //Since closest to both is the same, choose wizard that's closer
+                if e1.collider.pos.distance(wizards[0].collider.pos) <
+                    e1.collider.pos.distance(wizards[1].collider.pos) {
+                    wizards[0].set_target(Some(e1.id));
                 } else {
-                    wizards[0].set_target(Some(closest1.id));
-                    wizards[1].set_target(Some(closest2.id));
+                    wizards[1].set_target(Some(e1.id));
                 }
+            } else {
+                wizards[0].set_target(Some(e1.id));
+                wizards[1].set_target(Some(e2.id));
             }
         }
+    }
+    fn target_strategy(&self) -> TargetStrategy {
+        TargetStrategy::ClosestToWizard
     }
     fn other_wizard(&self, wizard: &Entity) -> Entity {
         self.wizards().iter().find(|e| e.id != wizard.id).cloned().unwrap()
@@ -599,17 +622,32 @@ impl State {
             .filter(|e| e.entity_type != EntityType::Wizard)
             .map(|e| e.future_turns(2).clone()).collect()
     }
+    fn closest_snaffles(&self, pos: Vector2) -> Vec<Entity> {
+        let mut snaffles = self.snaffles();
+        snaffles.sort_by(|a, b| {
+            (a.collider.pos.distance(pos) as i32).cmp(
+                &(b.collider.pos.distance(pos) as i32)
+            )
+        });
+        snaffles
+    }
     fn closest_snaffle(&self, pos: Vector2) -> Option<Entity> {
         let snaffles = self.snaffles();
         if snaffles.len() == 0 { None } else {
             snaffles.iter().min_by(|a, b| {
-                (a.collider.destination_turns(2).distance(pos) as i32).cmp(
-                    &(b.collider.destination_turns(2).distance(pos) as i32)
+                (a.collider.pos.distance(pos) as i32).cmp(
+                    &(b.collider.pos.distance(pos) as i32)
                 )
             }).cloned()
         }
     }
-    pub fn optimal_throw_location(&self, thrower: &Entity) -> Vector2 {
+    fn is_obstacles_in_between(&self, start: &Vector2, end: &Vector2) -> bool {
+        let obstacles = self.obstacles();
+        self.in_between_colliders(start, end, 20).iter().any(|c| {
+            obstacles.iter().any(|o| o.collider.collides(c))
+        })
+    }
+    fn optimal_goal_location(&self, thrower: &Entity) -> Vector2 {
         let obstacle_futures: Vec<Entity> =
             self.obstacles().iter().map(|e| e.future_turns(2).clone()).collect();
         let points_in_goal: Vec<Vector2> = self.target_goal.points_inside_goal(10);
