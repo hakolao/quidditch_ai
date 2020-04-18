@@ -106,6 +106,9 @@ impl Collider {
     pub fn collides(&self, other: &Collider) -> bool {
         self.pos.distance(other.pos) < self.radius + other.radius
     }
+    pub fn is_inside(&self, v2: Vector2) -> bool {
+        self.pos.distance(v2) < self.radius
+    }
     pub fn destination(&self) -> Vector2 {
         self.pos.add(self.vel.mul_num(self.friction))
     }
@@ -175,36 +178,37 @@ impl Goal {
         if team_id == 0 {
             Goal {
                 pole_top: Collider::new(
-                    Vector2::new(16000.0, 3750.0 - 4000.0),
+                    Vector2::new(16000.0, 3750.0 - 2000.0),
                     Vector2::new(0.0, 0.0), 0., 0.0, 300.0, ),
                 pole_bottom: Collider::new(
-                    Vector2::new(16000.0, 3750.0 + 4000.0),
+                    Vector2::new(16000.0, 3750.0 + 2000.0),
                     Vector2::new(0.0, 0.0), 0., 0.0, 300.0, ),
             }
         } else {
             Goal {
                 pole_top: Collider::new(
-                    Vector2::new(0.0, 3750.0 - 4000.0),
+                    Vector2::new(0.0, 3750.0 - 2000.0),
                     Vector2::new(0.0, 0.0), 0., 0.0, 300.0, ),
                 pole_bottom: Collider::new(
-                    Vector2::new(0.0, 3750.0 + 4000.0),
+                    Vector2::new(0.0, 3750.0 + 2000.0),
                     Vector2::new(0.0, 0.0), 0., 0.0, 300.0, ),
             }
         }
     }
     pub fn destination_is_close(&self, entity: &Entity, close_to_limit: f32) -> bool {
-        self.points_inside_goal().iter().any(|&point| {
+        self.points_inside_goal(10).iter().any(|&point| {
             let dist_from_point = entity.collider.destination().distance(point);
             dist_from_point < close_to_limit
         })
     }
-    pub fn points_inside_goal(&self) -> Vec<Vector2> {
-        let div = 6.;
+    pub fn points_inside_goal(&self, num: usize) -> Vec<Vector2> {
+        let div = num as f32;
         let mut points = vec![];
-        for i in 0..(div as i32) {
+        for i in 0..num {
             points.push(Vector2::new(
                 self.pole_bottom.pos.x,
-                self.pole_top.pos.y + i as f32 * (4000.0 / div),
+                self.pole_top.pos.y + self.pole_top.radius + 150.0 + i as f32 *
+                    ((4000.0 - self.pole_top.radius - 150.0) / div),
             ))
         }
         points
@@ -384,7 +388,7 @@ impl State {
         if self.bludgers().iter().any(|b| b.future().collider.collides(
             &self.other_wizard(wizard).future().collider
         )) {
-            self.target_goal.random_inside_goal()
+            self.optimal_throw_location(wizard)
             //other wizard is close && its destination distance from goal is closer
             //than self => pass to other wizard
             //ToDo check that nothing is in between
@@ -393,7 +397,7 @@ impl State {
                 wizard.collider.pos.distance(self.target_goal.center()) {
             other_wizard_dest
         } else {
-            self.target_goal.random_inside_goal()
+            self.optimal_throw_location(wizard)
         }
     }
     fn throw_power(&self, wizard: &Entity, dest: &Vector2) -> i32 {
@@ -446,10 +450,10 @@ impl State {
             b.future().collider.collides(&wiz1.collider) ||
                 b.future().collider.collides(&wiz2.collider)
         }) {
-            self.target_goal.random_inside_goal()
+            self.optimal_throw_location(target)
             //Target is close to goal, shoot at goal
         } else if self.target_goal.destination_is_close(target, 2000.) {
-            self.target_goal.random_inside_goal()
+            self.optimal_throw_location(target)
             //Target is closer to wiz1 than wiz1 && wiz1 is closer to goal => pass to wiz1
         } else if wiz1_dist < wiz2_dist && wiz1_is_ahead {
             wiz1.collider.pos
@@ -457,7 +461,7 @@ impl State {
         } else if wiz2_dist < wiz1_dist && wiz2_is_ahead {
             wiz2.collider.pos
         } else {
-            self.target_goal.random_inside_goal()
+            self.optimal_throw_location(target)
         }
     }
     fn magic_power(&self, target: &Entity, dest: &Vector2, magic_left: i32) -> i32 {
@@ -549,6 +553,50 @@ impl State {
                     &(b.collider.pos.distance(pos) as i32)
                 )
             }).cloned()
+        }
+    }
+    pub fn optimal_throw_location(&self, thrower: &Entity) -> Vector2 {
+        let obstacle_futures: Vec<Entity> = self.entities.iter()
+                                                .filter(|e| e.entity_type != EntityType::Wizard)
+                                                .map(|e| e.future().clone())
+                                                .collect();
+        let points_in_goal: Vec<Vector2> = self.target_goal.points_inside_goal(10);
+        let optimal_points: Vec<Vector2> = points_in_goal.iter().filter(|&goal_p| {
+            let mut snaffles_in_between = vec![];
+            let div = 20.0;
+            let dist = thrower.collider.pos.distance(goal_p.clone());
+            let position = Vector2::new(
+                thrower.collider.pos.x,
+                thrower.collider.pos.y,
+            );
+            for i in 0..(div as i32) {
+                let direction = position.direction(goal_p.clone());
+                let new_pos = position.add(
+                    Vector2::new(
+                        direction.x * i as f32 * dist / div,
+                        direction.y * i as f32 * dist / div,
+                    )
+                );
+                snaffles_in_between.push(Entity::new(99,
+                                                     EntityType::Snaffle,
+                                                     Collider::new(
+                                                         new_pos,
+                                                         Vector2::new(0., 0.), 0.75, 0.5, 150.,
+                                                     ), false));
+            }
+            // If any point in between is inside any obstacle
+            obstacle_futures.iter().any(|o| {
+                snaffles_in_between.iter().any(|s| {
+                    s.collider.collides(&o.collider)
+                })
+            })
+        }).cloned().collect();
+        //No optimal points, just shoot at goal
+        if optimal_points.len() == 0 {
+            self.target_goal.random_inside_goal()
+            //Optimal points, choose one of them randomly
+        } else {
+            optimal_points[optimal_points.len() / 2]
         }
     }
 }
