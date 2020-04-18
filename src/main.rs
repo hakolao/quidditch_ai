@@ -110,11 +110,25 @@ impl Collider {
         self.pos.distance(v2) < self.radius
     }
     pub fn destination(&self) -> Vector2 {
-        self.pos.add(self.vel.mul_num(self.friction))
+        self.destination_turns(1)
     }
     //ToDo: Implement boundary checks, bounces & collisions
     pub fn destination_turns(&self, turns: i32) -> Vector2 {
-        self.pos.add(self.vel.mul_num(self.friction.powi(turns)))
+        let mut new_vel = self.vel.mul_num(self.friction);
+        let mut new_pos = self.pos.add(new_vel);
+        for turn in 1..turns {
+            new_vel = self.vel.mul_num(self.friction);
+            new_pos = new_pos.add(new_vel);
+        }
+        new_pos
+    }
+
+    pub fn velocity_turns(&self, turns: i32) -> Vector2 {
+        let mut new_vel = self.vel.mul_num(self.friction);
+        for turn in 1..turns {
+            new_vel = self.vel.mul_num(self.friction);
+        }
+        new_vel
     }
 }
 
@@ -151,12 +165,16 @@ impl Entity {
     }
     //ToDo could implement destinations & values per turn, e.g future(2) 2 turns onwards
     pub fn future(&self) -> Entity {
+        self.future_turns(1)
+    }
+
+    pub fn future_turns(&self, turns: i32) -> Entity {
         Entity {
             id: self.id,
             entity_type: self.entity_type.clone(),
             collider: Collider::new(
-                self.collider.destination(),
-                self.collider.vel.mul_num(self.collider.friction),
+                self.collider.destination_turns(turns),
+                self.collider.velocity_turns(turns),
                 self.collider.friction,
                 self.collider.mass,
                 self.collider.radius,
@@ -197,7 +215,7 @@ impl Goal {
     }
     pub fn destination_is_close(&self, entity: &Entity, close_to_limit: f32) -> bool {
         self.points_inside_goal(10).iter().any(|&point| {
-            let dist_from_point = entity.collider.destination().distance(point);
+            let dist_from_point = entity.collider.destination_turns(2).distance(point);
             dist_from_point < close_to_limit
         })
     }
@@ -383,7 +401,7 @@ impl State {
         }
     }
     fn throw_destination(&self, wizard: &Entity) -> Vector2 {
-        let other_wizard_dest = self.other_wizard(wizard).collider.destination();
+        let other_wizard_dest = self.other_wizard(wizard).collider.destination_turns(2);
         //Bludgers hit other wizard next turn
         if self.bludgers().iter().any(|b| b.future().collider.collides(
             &self.other_wizard(wizard).future().collider
@@ -416,14 +434,14 @@ impl State {
             return self.opponents().first().cloned().unwrap();
         }
         snaffles.sort_by(|a, b| {
-            (a.collider.destination().distance(self.target_goal.center()) as i32).cmp(
-                &(b.collider.destination().distance(self.target_goal.center()) as i32)
+            (a.collider.destination_turns(2).distance(self.target_goal.center()) as i32).cmp(
+                &(b.collider.destination_turns(2).distance(self.target_goal.center()) as i32)
             )
         });
         let closest_to_target = snaffles.first().cloned().unwrap();
         snaffles.sort_by(|a, b| {
-            (a.collider.destination().distance(self.own_goal.center()) as i32).cmp(
-                &(b.collider.destination().distance(self.own_goal.center()) as i32)
+            (a.collider.destination_turns(2).distance(self.own_goal.center()) as i32).cmp(
+                &(b.collider.destination_turns(2).distance(self.own_goal.center()) as i32)
             )
         });
         let closest_to_own_goal = snaffles.first().cloned().unwrap();
@@ -472,7 +490,7 @@ impl State {
             let target_id = wizard.target.unwrap();
             let target = self.entities.iter().find(|e| e.id == target_id)
                              .cloned().unwrap();
-            let destination = target.collider.destination();
+            let destination = target.collider.destination_turns(2);
             destination
         } else {
             Vector2::new(WIDTH as f32 / 2., HEIGHT as f32 / 2.)
@@ -558,7 +576,7 @@ impl State {
     pub fn optimal_throw_location(&self, thrower: &Entity) -> Vector2 {
         let obstacle_futures: Vec<Entity> = self.entities.iter()
                                                 .filter(|e| e.entity_type != EntityType::Wizard)
-                                                .map(|e| e.future().clone())
+                                                .map(|e| e.future_turns(2).clone())
                                                 .collect();
         let points_in_goal: Vec<Vector2> = self.target_goal.points_inside_goal(10);
         let optimal_points: Vec<Vector2> = points_in_goal.iter().filter(|&goal_p| {
