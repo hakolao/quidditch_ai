@@ -1,6 +1,4 @@
 use std::io;
-use rand::{thread_rng, Rng};
-use std::borrow::{Borrow, BorrowMut};
 
 macro_rules! parse_input {
     ($x:expr, $t:ident) => ($x.trim().parse::<$t>().unwrap())
@@ -47,13 +45,12 @@ fn parse_entity_variables() -> (i32, String, i32, i32, i32, i32, bool) {
     (entity_id, entity_type, x, y, vx, vy, has_snaffle == 1)
 }
 
-static BOUNDS: &'static [(i32, i32)] = &[(0, 0), (16001, 0), (0, 7501), (7501, 16001)];
 static WIDTH: i32 = 16001;
 static HEIGHT: i32 = 7501;
 static MAX_THRUST: i32 = 150;
 static MAX_POWER: i32 = 500;
 static MAX_MAGIC: i32 = 100;
-static MAGIC_MUL: i32 = 15;
+static LOOKAHEAD: i32 = 4;
 
 #[derive(Debug, Clone, Copy, PartialOrd, PartialEq)]
 struct Vector2 {
@@ -64,13 +61,6 @@ struct Vector2 {
 impl Vector2 {
     pub fn new(x: f32, y: f32) -> Vector2 {
         Vector2 { x, y }
-    }
-    pub fn len(&self) -> f32 {
-        (self.x.powi(2) + self.y.powi(2)).sqrt()
-    }
-    pub fn normalized(&self) -> Vector2 {
-        let len = self.len();
-        Vector2::new(self.x / len, self.y / len)
     }
     pub fn add(&self, v2: Vector2) -> Vector2 {
         Vector2::new(self.x + v2.x, self.y + v2.y)
@@ -87,7 +77,6 @@ impl Vector2 {
     pub fn mul_num(&self, num: f32) -> Vector2 {
         Vector2::new(self.x * num, self.y * num)
     }
-    pub fn mul(&self, v2: Vector2) -> Vector2 { Vector2::new(self.x * v2.x, self.y * v2.y) }
     pub fn distance(&self, v2: Vector2) -> f32 {
         ((self.x - v2.x).powi(2) +
             (self.y - v2.y).powi(2)).sqrt()
@@ -110,17 +99,10 @@ impl Collider {
     pub fn collides(&self, other: &Collider) -> bool {
         self.pos.distance(other.pos) < self.radius + other.radius
     }
-    pub fn is_inside(&self, v2: Vector2) -> bool {
-        self.pos.distance(v2) < self.radius
-    }
-    pub fn destination(&self) -> Vector2 {
-        self.destination_turns(1)
-    }
-    //ToDo: Implement boundary checks, bounces & collisions
     pub fn destination_turns(&self, turns: i32) -> Vector2 {
         let mut new_vel = self.vel.mul_num(self.friction);
         let mut new_pos = self.pos.add(new_vel);
-        for turn in 1..turns {
+        for _ in 1..turns {
             new_vel = self.vel.mul_num(self.friction);
             new_pos = new_pos.add(new_vel);
         }
@@ -129,7 +111,7 @@ impl Collider {
 
     pub fn velocity_turns(&self, turns: i32) -> Vector2 {
         let mut new_vel = self.vel.mul_num(self.friction);
-        for turn in 1..turns {
+        for _ in 1..turns {
             new_vel = self.vel.mul_num(self.friction);
         }
         new_vel
@@ -161,17 +143,12 @@ impl Entity {
         self.collider.pos.x = x as f32;
         self.collider.pos.y = y as f32;
         self.collider.vel.x = vx as f32;
-        self.collider.vel.x = vy as f32;
+        self.collider.vel.y = vy as f32;
         self.has_snaffle = has_snaffle;
     }
     pub fn set_target(&mut self, target: Option<i32>) {
         self.target = target;
     }
-    //ToDo could implement destinations & values per turn, e.g future(2) 2 turns onwards
-    pub fn future(&self) -> Entity {
-        self.future_turns(1)
-    }
-
     pub fn future_turns(&self, turns: i32) -> Entity {
         Entity {
             id: self.id,
@@ -219,7 +196,7 @@ impl Goal {
     }
     pub fn destination_is_close(&self, entity: &Entity, close_to_limit: f32) -> bool {
         self.points_inside_goal(10).iter().any(|&point| {
-            let dist_from_point = entity.collider.destination().distance(point);
+            let dist_from_point = entity.collider.destination_turns(LOOKAHEAD).distance(point);
             dist_from_point < close_to_limit
         })
     }
@@ -235,19 +212,10 @@ impl Goal {
         }
         points
     }
-    pub fn inner_bounds(&self) -> (Vector2, Vector2) {
-        (
-            Vector2::new(self.pole_top.pos.x, self.pole_top.pos.y + self.pole_top.radius),
-            Vector2::new(self.pole_bottom.pos.x, self.pole_bottom.pos.y - self.pole_top.radius),
-        )
-    }
     pub fn center(&self) -> Vector2 { Vector2::new(self.pole_bottom.pos.x, 3750.0) }
-    pub fn random_inside_goal(&self) -> Vector2 {
-        let mut rng = thread_rng();
-        let x_to = self.pole_top.pos.x;
-        let inner_bounds = self.inner_bounds();
-        let y_to = rng.gen_range(inner_bounds.0.y + 150., inner_bounds.1.y - 150.);
-        Vector2::new(x_to, y_to)
+    pub fn behind_goal(&self) -> Vector2 {
+        let center = self.center();
+        Vector2::new(center.x + if center.x == 0. { -2000. } else { 2000. }, center.y)
     }
 }
 
@@ -261,9 +229,6 @@ enum ActionType {
 #[derive(Debug, Clone, PartialOrd, PartialEq)]
 enum TargetStrategy {
     ClosestToWizard,
-    ClosestToOpponent,
-    ClosestToTargetGoal,
-    ClosestToOwnGoal,
 }
 
 #[derive(Debug, Clone, PartialOrd, PartialEq)]
@@ -364,7 +329,7 @@ impl State {
             match self.optimal_action(&wizard, &magic_left) {
                 ActionType::Throw => {
                     let dest: Vector2 = self.throw_destination(wizard);
-                    self.throw_action(&dest, self.throw_power(wizard, &dest));
+                    self.throw_action(&dest, MAX_POWER);
                 }
                 ActionType::Magic => {
                     let target: Entity = self.magic_target();
@@ -375,7 +340,7 @@ impl State {
                 }
                 ActionType::Move => {
                     let dest: Vector2 = self.move_destination(wizard);
-                    self.move_action(&dest, self.thrust_power(wizard, &dest))
+                    self.move_action(&dest, MAX_THRUST)
                 }
             }
         }
@@ -405,26 +370,24 @@ impl State {
         }
     }
     fn throw_destination(&self, wizard: &Entity) -> Vector2 {
-        let other_wizard_dest = self.other_wizard(wizard).collider.destination();
-        let result = if wizard.collider.pos.distance(self.target_goal.center()) < 4000. {
-            self.optimal_goal_location(wizard)
-        } else if other_wizard_dest.distance(wizard.collider.pos) < 1500. &&
+        let wizard_future = wizard.clone().future_turns(LOOKAHEAD);
+        let other_wizard_dest = self.other_wizard(&wizard_future).collider.destination_turns(LOOKAHEAD);
+        let result = if wizard_future.collider.pos.distance(self.target_goal.center()) < 4000. {
+            self.target_goal.behind_goal()
+        } else if other_wizard_dest.distance(wizard_future.collider.pos) < 1500. &&
             other_wizard_dest.distance(self.target_goal.center()) <
-                wizard.collider.pos.distance(self.target_goal.center()) &&
-            !self.is_obstacles_in_between(&wizard.collider.pos, &other_wizard_dest) {
+                wizard_future.collider.pos.distance(self.target_goal.center()) &&
+            !self.is_obstacles_in_between(&wizard_future.collider.pos, &other_wizard_dest) {
             other_wizard_dest
-        } else if wizard.collider.pos.distance(self.target_goal.center()) > WIDTH as f32 / 2. {
-            match self.open_destination_ahead(wizard) {
+        } else if wizard_future.collider.pos.distance(self.target_goal.center()) > WIDTH as f32 / 2. {
+            match self.open_destination_ahead(&wizard_future, 8000) {
                 Some(dest) => dest,
-                None => self.optimal_goal_location(wizard)
+                None => self.target_goal.behind_goal()
             }
         } else {
-            self.optimal_goal_location(wizard)
+            self.target_goal.behind_goal()
         };
-        result.add(wizard.collider.vel.negate())
-    }
-    fn throw_power(&self, wizard: &Entity, dest: &Vector2) -> i32 {
-        MAX_POWER
+        result.add(wizard_future.collider.vel.negate())
     }
     fn magic_target(&self) -> Entity {
         // Since should magic is about "close to target or own goal", let's find closest to either
@@ -434,36 +397,37 @@ impl State {
             return self.opponents().first().cloned().unwrap();
         }
         snaffles.sort_by(|a, b| {
-            (a.collider.destination().distance(self.target_goal.center()) as i32).cmp(
-                &(b.collider.destination().distance(self.target_goal.center()) as i32)
+            (a.collider.destination_turns(LOOKAHEAD).distance(self.target_goal.center()) as i32).cmp(
+                &(b.collider.destination_turns(LOOKAHEAD).distance(self.target_goal.center()) as i32)
             )
         });
         let closest_to_target = self.closest_snaffle(self.target_goal.center()).unwrap();
         let closest_to_own_goal = self.closest_snaffle(self.own_goal.center()).unwrap();
-        if closest_to_target.collider.pos.distance(self.target_goal.center()) <
-            closest_to_own_goal.collider.pos.distance(self.own_goal.center()) {
+        if closest_to_target.collider.destination_turns(LOOKAHEAD).distance(self.target_goal.center()) <
+            closest_to_own_goal.collider.destination_turns(LOOKAHEAD).distance(self.own_goal.center()) {
             closest_to_target
         } else {
             closest_to_own_goal
         }
     }
     fn magic_destination(&self, target: &Entity) -> Vector2 {
+        let target_future = target.future_turns(LOOKAHEAD);
         let wizards = self.wizards();
         //Take their future positions
-        let wiz1 = wizards[0].clone().future_turns(2);
-        let wiz2 = wizards[1].clone().future_turns(2);
+        let wiz1 = wizards[0].clone().future_turns(LOOKAHEAD);
+        let wiz2 = wizards[1].clone().future_turns(LOOKAHEAD);
         let wiz1_is_ahead = wiz1.collider.pos.distance(self.target_goal.center()) <
-            target.collider.pos.distance(self.target_goal.center());
+            target_future.collider.pos.distance(self.target_goal.center());
         let wiz2_is_ahead = wiz2.collider.pos.distance(self.target_goal.center()) <
-            target.collider.pos.distance(self.target_goal.center());
-        let wiz1_dist = wiz1.collider.pos.distance(target.collider.pos);
-        let wiz2_dist = wiz2.collider.pos.distance(target.collider.pos);
+            target_future.collider.pos.distance(self.target_goal.center());
+        let wiz1_dist = wiz1.collider.pos.distance(target_future.collider.pos);
+        let wiz2_dist = wiz2.collider.pos.distance(target_future.collider.pos);
         //Target is close to goal, shoot at goal
         let result =
-            if target.collider.pos.distance(self.target_goal.center()) < WIDTH as f32 / 2. {
-                self.optimal_goal_location(target)
+            if target_future.collider.pos.distance(self.target_goal.center()) < WIDTH as f32 / 2. {
+                self.target_goal.behind_goal()
             } else {
-                match self.open_destination_ahead(target) {
+                match self.open_destination_ahead(&target_future, 4000) {
                     Some(dest) => dest,
                     None => {
                         if wiz1_is_ahead && wiz2_is_ahead {
@@ -471,29 +435,30 @@ impl State {
                         } else if wiz1_is_ahead
                         { wiz1.collider.pos } else if wiz2_is_ahead
                         { wiz2.collider.pos } else {
-                            self.optimal_goal_location(target)
+                            self.target_goal.behind_goal()
                         }
                     }
                 }
             };
-        result.add(target.collider.vel.negate())
+        result.add(target_future.collider.vel.negate())
     }
-    fn open_destination_ahead(&self, target: &Entity) -> Option<Vector2> {
-        let future_pos = target.collider.destination();
+    fn open_destination_ahead(&self, target: &Entity, far: i32) -> Option<Vector2> {
+        let future_pos = target.collider.destination_turns(LOOKAHEAD);
         // From top to bottom
         let multiplier = if self.team_id == 0 {
             1
         } else { -1 } as f32;
         let vertical_points_ahead = self.in_between_points(
-            &Vector2::new(future_pos.x + multiplier * 2000., 0.0),
-            &Vector2::new(future_pos.x + multiplier * 2000., 16000.0),
-            20,
+            &Vector2::new(future_pos.x + multiplier * far as f32, 0.0),
+            &Vector2::new(future_pos.x + multiplier * far as f32, 16000.0),
+            10,
         );
-        let obstacles = self.obstacles();
+        let obstacles: Vec<Entity> = self.obstacles().iter()
+                                         .map(|o| o.future_turns(LOOKAHEAD).clone()).collect();
         //Filter vertical points to only those that don't have obstacles between target & point
         let possible_destinations = vertical_points_ahead.iter().filter(|p| {
             //Filter vertical positions with direct line of sight to target
-            self.in_between_colliders(&future_pos, p, 20).iter().any(|c| {
+            !self.in_between_colliders(&future_pos, p, 10).iter().any(|c| {
                 obstacles.iter().any(|o| o.collider.collides(c))
             })
         }).cloned().collect::<Vec<Vector2>>();
@@ -503,8 +468,7 @@ impl State {
         }).cloned()
     }
     fn magic_power(&self, target: &Entity, dest: &Vector2, magic_left: i32) -> i32 {
-        let magic_needed = target.collider.destination()
-                                 .add(target.collider.velocity_turns(2).negate())
+        let magic_needed = target.collider.destination_turns(LOOKAHEAD)
                                  .distance(dest.clone()) *
             target.collider.friction / target.collider.mass;
         if magic_needed as i32 >= magic_left {
@@ -518,22 +482,12 @@ impl State {
             let target_id = wizard.target.unwrap();
             let target = self.entities.iter().find(|e| e.id == target_id)
                              .cloned().unwrap();
-            let destination = target.collider.destination_turns(2);
-            destination
+            let destination = target.collider.destination_turns(LOOKAHEAD);
+            destination.add(wizard.collider.vel.negate())
         } else {
             Vector2::new(WIDTH as f32 / 2., HEIGHT as f32 / 2.)
         }
     }
-    fn thrust_power(&self, wizard: &Entity, dest: &Vector2) -> i32 {
-        let thrust_needed = wizard.collider.pos.distance(dest.clone()) *
-            wizard.collider.friction / wizard.collider.mass;
-        if thrust_needed as i32 >= MAX_THRUST {
-            MAX_THRUST
-        } else {
-            thrust_needed as i32
-        }
-    }
-
     fn set_targets(&mut self) {
         let snaffles = self.snaffles();
         let clone_state = self.clone();
@@ -546,12 +500,10 @@ impl State {
         wizards[0].set_target(None);
         wizards[1].set_target(None);
         if snaffles.len() == 0 { return; }
-        let mut closest1 = None;
-        let mut closest2 = None;
         match target_strategy {
             TargetStrategy::ClosestToWizard => {
-                closest1 = clone_state.closest_snaffle(wizards[0].collider.pos);
-                closest2 = clone_state.closest_snaffle(wizards[1].collider.pos);
+                let closest1 = clone_state.closest_snaffle(wizards[0].collider.pos);
+                let mut closest2 = clone_state.closest_snaffle(wizards[1].collider.pos);
                 if snaffles.len() > 1 {
                     let e1_id = closest1.clone().unwrap().id;
                     let e2_id = closest2.clone().unwrap().id;
@@ -559,45 +511,19 @@ impl State {
                         closest2 = clone_state.second_closest_snaffle(e1_id, wizards[1].collider.pos);
                     }
                 }
-            }
-            TargetStrategy::ClosestToOpponent => {
-                let ops = clone_state.opponents();
-                closest1 = clone_state.closest_snaffle(ops[0].collider.pos);
-                closest2 = clone_state.closest_snaffle(ops[1].collider.pos);
-                if snaffles.len() > 1 {
-                    let e1_id = closest1.clone().unwrap().id;
-                    let e2_id = closest2.clone().unwrap().id;
-                    if e1_id == e2_id {
-                        closest2 = clone_state.second_closest_snaffle(e1_id, ops[1].collider.pos);
-                    }
+                if snaffles.len() == 1 {
+                    let e1 = closest1.unwrap();
+                    //Same target
+                    wizards[0].set_target(Some(e1.id));
+                    wizards[1].set_target(Some(e1.id));
+                } else if snaffles.len() > 1 {
+                    let e1 = closest1.unwrap();
+                    let e2 = closest2.unwrap();
+                    wizards[0].set_target(Some(e1.id));
+                    wizards[1].set_target(Some(e2.id));
                 }
             }
-            TargetStrategy::ClosestToTargetGoal => {
-                let closest_to_goal = clone_state.closest_snaffles(clone_state.target_goal.center());
-                closest1 = closest_to_goal.first().cloned();
-                closest2 = if closest_to_goal.len() > 1 {
-                    Some(closest_to_goal[1].clone())
-                } else { closest1.clone() };
-            }
-            TargetStrategy::ClosestToOwnGoal => {
-                let closest_to_goal = clone_state.closest_snaffles(clone_state.own_goal.center());
-                closest1 = closest_to_goal.first().cloned();
-                closest2 = if closest_to_goal.len() > 1 {
-                    Some(closest_to_goal[1].clone())
-                } else { closest1.clone() };
-            }
         };
-        if snaffles.len() == 1 {
-            let e1 = closest1.unwrap();
-            //Same target
-            wizards[0].set_target(Some(e1.id));
-            wizards[1].set_target(Some(e1.id));
-        } else if snaffles.len() > 1 {
-            let e1 = closest1.unwrap();
-            let e2 = closest2.unwrap();
-            wizards[0].set_target(Some(e1.id));
-            wizards[1].set_target(Some(e2.id));
-        }
     }
     fn target_strategy(&self) -> TargetStrategy {
         TargetStrategy::ClosestToWizard
@@ -620,81 +546,41 @@ impl State {
     }
     fn wizards(&self) -> Vec<Entity> { self.entities_of_type(EntityType::Wizard) }
     fn opponents(&self) -> Vec<Entity> { self.entities_of_type(EntityType::Opponent) }
-    fn bludgers(&self) -> Vec<Entity> { self.entities_of_type(EntityType::Bludger) }
     fn snaffles(&self) -> Vec<Entity> { self.entities_of_type(EntityType::Snaffle) }
     fn obstacles(&self) -> Vec<Entity> {
         self.entities.iter()
             .filter(|e| e.entity_type != EntityType::Wizard)
             .cloned().collect()
     }
-    fn closest_snaffles(&self, pos: Vector2) -> Vec<Entity> {
-        let mut snaffles = self.snaffles();
-        snaffles.sort_by(|a, b| {
-            (a.collider.pos.distance(pos) as i32).cmp(
-                &(b.collider.pos.distance(pos) as i32)
-            )
-        });
-        snaffles
-    }
     fn closest_snaffle(&self, pos: Vector2) -> Option<Entity> {
         self.snaffles().iter().min_by(|a, b| {
-            (a.collider.pos.distance(pos) as i32).cmp(
-                &(b.collider.pos.distance(pos) as i32)
+            (a.collider.destination_turns(LOOKAHEAD).distance(pos) as i32).cmp(
+                &(b.collider.destination_turns(LOOKAHEAD).distance(pos) as i32)
             )
         }).cloned()
     }
     fn second_closest_snaffle(&self, ignore_id: i32, pos: Vector2) -> Option<Entity> {
         self.snaffles().iter().filter(|s| s.id != ignore_id)
             .min_by(|a, b| {
-                (a.collider.pos.distance(pos) as i32)
-                    .cmp(&(b.collider.pos.distance(pos) as i32))
+                (a.collider.destination_turns(LOOKAHEAD).distance(pos) as i32)
+                    .cmp(&(b.collider.destination_turns(LOOKAHEAD).distance(pos) as i32))
             }).cloned()
     }
     fn is_obstacles_in_between(&self, start: &Vector2, end: &Vector2) -> bool {
         let obstacles = self.obstacles();
-        self.in_between_colliders(start, end, 20).iter().any(|c| {
+        self.in_between_colliders(start, end, 10).iter().any(|c| {
             obstacles.iter().any(|o| o.collider.collides(c))
         })
     }
-    fn optimal_goal_location(&self, thrower: &Entity) -> Vector2 {
-        let obstacles: Vec<Entity> = self.obstacles();
-        let points_in_goal: Vec<Vector2> = self.target_goal.points_inside_goal(20);
-        let optimal_points: Vec<Vector2> = points_in_goal.iter().filter(|&goal_p| {
-            let colliders_in_between = self.in_between_colliders(&thrower.collider.pos, goal_p, 20);
-            // If any point in between is inside any obstacle, then false
-            !obstacles.iter().any(|o| {
-                colliders_in_between.iter().any(|c| {
-                    c.collides(&o.collider)
-                })
-            })
-        }).cloned().collect();
-        //No optimal points, just shoot at goal
-        if optimal_points.len() == 0 {
-            self.target_goal.random_inside_goal()
-            //Optimal points, choose one of them randomly
-        } else {
-            optimal_points.iter().min_by(|a, b| {
-                (a.distance(thrower.collider.pos) as i32).cmp(
-                    &(b.distance(thrower.collider.pos) as i32))
-            }).cloned().unwrap()
-        }
-    }
-
     fn in_between_points(&self, start: &Vector2, end: &Vector2, num: i32) -> Vec<Vector2> {
         let mut points_int_between = vec![];
         let div = num as f32;
         let dist = start.distance(end.clone());
-        let position = Vector2::new(
-            start.x,
-            start.y,
-        );
-        for i in 0..num {
-            let direction = position.direction(end.clone());
+        let position = start.clone();
+        let direction = position.direction(end.clone());
+        for i in 1..num {
             let new_pos = position.add(
-                Vector2::new(
-                    direction.x * i as f32 * dist / div,
-                    direction.y * i as f32 * dist / div,
-                )
+                direction.mul_num(i as f32 * dist / div)
             );
             points_int_between.push(new_pos);
         }
