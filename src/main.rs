@@ -251,12 +251,14 @@ impl Goal {
     }
 }
 
+#[derive(Debug, Clone, PartialOrd, PartialEq)]
 enum ActionType {
     Throw,
     Move,
     Magic,
 }
 
+#[derive(Debug, Clone, PartialOrd, PartialEq)]
 enum TargetStrategy {
     ClosestToWizard,
     ClosestToOpponent,
@@ -362,28 +364,18 @@ impl State {
             match self.optimal_action(&wizard, &magic_left) {
                 ActionType::Throw => {
                     let dest: Vector2 = self.throw_destination(wizard);
-                    self.throw_action(
-                        &dest,
-                        self.throw_power(wizard, &dest),
-                    );
+                    self.throw_action(&dest, self.throw_power(wizard, &dest));
                 }
                 ActionType::Magic => {
                     let target: Entity = self.magic_target();
                     let dest: Vector2 = self.magic_destination(&target);
                     let magic_power = self.magic_power(&target, &dest, magic_left);
-                    self.magic_action(
-                        target.id,
-                        &dest,
-                        magic_power,
-                    );
+                    self.magic_action(&target, &dest, magic_power);
                     magic_left -= magic_power;
                 }
                 ActionType::Move => {
                     let dest: Vector2 = self.move_destination(wizard);
-                    self.move_action(
-                        &dest,
-                        self.thrust_power(wizard, &dest),
-                    )
+                    self.move_action(&dest, self.thrust_power(wizard, &dest))
                 }
             }
         }
@@ -414,16 +406,22 @@ impl State {
     }
     fn throw_destination(&self, wizard: &Entity) -> Vector2 {
         let other_wizard_dest = self.other_wizard(wizard).collider.destination();
-        if other_wizard_dest.distance(wizard.collider.pos) < 1500. &&
+        let result = if wizard.collider.pos.distance(self.target_goal.center()) < 4000. {
+            self.optimal_goal_location(wizard)
+        } else if other_wizard_dest.distance(wizard.collider.pos) < 1500. &&
             other_wizard_dest.distance(self.target_goal.center()) <
                 wizard.collider.pos.distance(self.target_goal.center()) &&
-            self.is_obstacles_in_between(&wizard.collider.pos, &other_wizard_dest) {
+            !self.is_obstacles_in_between(&wizard.collider.pos, &other_wizard_dest) {
             other_wizard_dest
         } else if wizard.collider.pos.distance(self.target_goal.center()) > WIDTH as f32 / 2. {
-            self.open_destination_ahead(wizard)
+            match self.open_destination_ahead(wizard) {
+                Some(dest) => dest,
+                None => self.optimal_goal_location(wizard)
+            }
         } else {
             self.optimal_goal_location(wizard)
-        }
+        };
+        result.add(wizard.collider.vel.negate())
     }
     fn throw_power(&self, wizard: &Entity, dest: &Vector2) -> i32 {
         MAX_POWER
@@ -461,15 +459,26 @@ impl State {
         let wiz1_dist = wiz1.collider.pos.distance(target.collider.pos);
         let wiz2_dist = wiz2.collider.pos.distance(target.collider.pos);
         //Target is close to goal, shoot at goal
-        if self.target_goal.destination_is_close(target, 8000.) {
-            self.optimal_goal_location(target).add(target.collider.vel.negate())
-        }
-        //Target is closer to wiz1 than wiz1 && wiz1 is closer to goal => pass to wiz1
-        else {
-            self.open_destination_ahead(target)
-        }
+        let result =
+            if target.collider.pos.distance(self.target_goal.center()) < WIDTH as f32 / 2. {
+                self.optimal_goal_location(target)
+            } else {
+                match self.open_destination_ahead(target) {
+                    Some(dest) => dest,
+                    None => {
+                        if wiz1_is_ahead && wiz2_is_ahead {
+                            if wiz1_dist < wiz2_dist { wiz1.collider.pos } else { wiz2.collider.pos }
+                        } else if wiz1_is_ahead
+                        { wiz1.collider.pos } else if wiz2_is_ahead
+                        { wiz2.collider.pos } else {
+                            self.optimal_goal_location(target)
+                        }
+                    }
+                }
+            };
+        result.add(target.collider.vel.negate())
     }
-    fn open_destination_ahead(&self, target: &Entity) -> Vector2 {
+    fn open_destination_ahead(&self, target: &Entity) -> Option<Vector2> {
         let future_pos = target.collider.destination();
         // From top to bottom
         let multiplier = if self.team_id == 0 {
@@ -491,7 +500,7 @@ impl State {
         possible_destinations.iter().min_by(|&a, &b| {
             (a.distance(future_pos) as i32)
                 .cmp(&(b.distance(future_pos) as i32))
-        }).unwrap().clone()
+        }).cloned()
     }
     fn magic_power(&self, target: &Entity, dest: &Vector2, magic_left: i32) -> i32 {
         let magic_needed = target.collider.destination()
@@ -509,7 +518,7 @@ impl State {
             let target_id = wizard.target.unwrap();
             let target = self.entities.iter().find(|e| e.id == target_id)
                              .cloned().unwrap();
-            let destination = target.collider.destination();
+            let destination = target.collider.destination_turns(2);
             destination
         } else {
             Vector2::new(WIDTH as f32 / 2., HEIGHT as f32 / 2.)
@@ -541,15 +550,27 @@ impl State {
         let mut closest2 = None;
         match target_strategy {
             TargetStrategy::ClosestToWizard => {
-                let pos1 = wizards[0].collider.pos;
-                let pos2 = wizards[1].collider.pos;
-                closest1 = clone_state.closest_snaffle(pos1);
-                closest2 = clone_state.closest_snaffle(pos2);
+                closest1 = clone_state.closest_snaffle(wizards[0].collider.pos);
+                closest2 = clone_state.closest_snaffle(wizards[1].collider.pos);
+                if snaffles.len() > 1 {
+                    let e1_id = closest1.clone().unwrap().id;
+                    let e2_id = closest2.clone().unwrap().id;
+                    if e1_id == e2_id {
+                        closest2 = clone_state.second_closest_snaffle(e1_id, wizards[1].collider.pos);
+                    }
+                }
             }
             TargetStrategy::ClosestToOpponent => {
                 let ops = clone_state.opponents();
                 closest1 = clone_state.closest_snaffle(ops[0].collider.pos);
                 closest2 = clone_state.closest_snaffle(ops[1].collider.pos);
+                if snaffles.len() > 1 {
+                    let e1_id = closest1.clone().unwrap().id;
+                    let e2_id = closest2.clone().unwrap().id;
+                    if e1_id == e2_id {
+                        closest2 = clone_state.second_closest_snaffle(e1_id, ops[1].collider.pos);
+                    }
+                }
             }
             TargetStrategy::ClosestToTargetGoal => {
                 let closest_to_goal = clone_state.closest_snaffles(clone_state.target_goal.center());
@@ -566,25 +587,16 @@ impl State {
                 } else { closest1.clone() };
             }
         };
-        let e1 = closest1.unwrap();
-        let e2 = closest2.unwrap();
         if snaffles.len() == 1 {
+            let e1 = closest1.unwrap();
             //Same target
             wizards[0].set_target(Some(e1.id));
             wizards[1].set_target(Some(e1.id));
         } else if snaffles.len() > 1 {
-            if e1.id == e2.id {
-                //Since closest to both is the same, choose wizard that's closer
-                if e1.collider.pos.distance(wizards[0].collider.pos) <
-                    e1.collider.pos.distance(wizards[1].collider.pos) {
-                    wizards[0].set_target(Some(e1.id));
-                } else {
-                    wizards[1].set_target(Some(e1.id));
-                }
-            } else {
-                wizards[0].set_target(Some(e1.id));
-                wizards[1].set_target(Some(e2.id));
-            }
+            let e1 = closest1.unwrap();
+            let e2 = closest2.unwrap();
+            wizards[0].set_target(Some(e1.id));
+            wizards[1].set_target(Some(e2.id));
         }
     }
     fn target_strategy(&self) -> TargetStrategy {
@@ -599,8 +611,8 @@ impl State {
     fn throw_action(&self, dest: &Vector2, power: i32) {
         println!("{} {} {} {} THROWING", "THROW", dest.x as i32, dest.y as i32, power)
     }
-    fn magic_action(&mut self, target_id: i32, dest: &Vector2, magic_power: i32) {
-        println!("{} {} {} {} {} DOING SPELLS LOL", "WINGARDIUM", target_id, dest.x as i32, dest.y as i32, magic_power)
+    fn magic_action(&mut self, target: &Entity, dest: &Vector2, magic_power: i32) {
+        println!("{} {} {} {} {} DOING SPELLS LOL", "WINGARDIUM", target.id, dest.x as i32, dest.y as i32, magic_power)
     }
     fn entities_of_type(&self, entity_type: EntityType) -> Vec<Entity> {
         self.entities.iter()
@@ -625,14 +637,18 @@ impl State {
         snaffles
     }
     fn closest_snaffle(&self, pos: Vector2) -> Option<Entity> {
-        let snaffles = self.snaffles();
-        if snaffles.len() == 0 { None } else {
-            snaffles.iter().min_by(|a, b| {
-                (a.collider.pos.distance(pos) as i32).cmp(
-                    &(b.collider.pos.distance(pos) as i32)
-                )
+        self.snaffles().iter().min_by(|a, b| {
+            (a.collider.pos.distance(pos) as i32).cmp(
+                &(b.collider.pos.distance(pos) as i32)
+            )
+        }).cloned()
+    }
+    fn second_closest_snaffle(&self, ignore_id: i32, pos: Vector2) -> Option<Entity> {
+        self.snaffles().iter().filter(|s| s.id != ignore_id)
+            .min_by(|a, b| {
+                (a.collider.pos.distance(pos) as i32)
+                    .cmp(&(b.collider.pos.distance(pos) as i32))
             }).cloned()
-        }
     }
     fn is_obstacles_in_between(&self, start: &Vector2, end: &Vector2) -> bool {
         let obstacles = self.obstacles();
