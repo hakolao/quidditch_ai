@@ -200,19 +200,19 @@ impl Goal {
         if team_id == 0 {
             Goal {
                 pole_top: Collider::new(
-                    Vector2::new(16000.0, 3750.0 - 2000.0),
+                    Vector2::new(16000.0, 1750.0),
                     Vector2::new(0.0, 0.0), 0., 0.0, 300.0, ),
                 pole_bottom: Collider::new(
-                    Vector2::new(16000.0, 3750.0 + 2000.0),
+                    Vector2::new(16000.0, 5750.0),
                     Vector2::new(0.0, 0.0), 0., 0.0, 300.0, ),
             }
         } else {
             Goal {
                 pole_top: Collider::new(
-                    Vector2::new(0.0, 3750.0 - 2000.0),
+                    Vector2::new(0.0, 1750.0),
                     Vector2::new(0.0, 0.0), 0., 0.0, 300.0, ),
                 pole_bottom: Collider::new(
-                    Vector2::new(0.0, 3750.0 + 2000.0),
+                    Vector2::new(0.0, 5750.0),
                     Vector2::new(0.0, 0.0), 0., 0.0, 300.0, ),
             }
         }
@@ -226,11 +226,11 @@ impl Goal {
     pub fn points_inside_goal(&self, num: usize) -> Vec<Vector2> {
         let div = num as f32;
         let mut points = vec![];
-        for i in 0..num {
+        let dist = self.pole_top.pos.distance(self.pole_bottom.pos) - self.pole_top.radius * 2.0;
+        for i in 0..(num - 1) {
             points.push(Vector2::new(
                 self.pole_bottom.pos.x,
-                self.pole_top.pos.y + self.pole_top.radius + 150.0 + i as f32 *
-                    ((4000.0 - self.pole_top.radius - 150.0) / div),
+                self.pole_top.pos.y + self.pole_top.radius + 200.0 + i as f32 * (dist / div),
             ))
         }
         points
@@ -461,7 +461,7 @@ impl State {
         let wiz1_dist = wiz1.collider.pos.distance(target.collider.pos);
         let wiz2_dist = wiz2.collider.pos.distance(target.collider.pos);
         //Target is close to goal, shoot at goal
-        if self.target_goal.destination_is_close(target, 2000.) {
+        if self.target_goal.destination_is_close(target, 8000.) {
             self.optimal_goal_location(target).add(target.collider.vel.negate())
         }
         //Target is closer to wiz1 than wiz1 && wiz1 is closer to goal => pass to wiz1
@@ -620,7 +620,7 @@ impl State {
     fn obstacles(&self) -> Vec<Entity> {
         self.entities.iter()
             .filter(|e| e.entity_type != EntityType::Wizard)
-            .map(|e| e.future_turns(2).clone()).collect()
+            .cloned().collect()
     }
     fn closest_snaffles(&self, pos: Vector2) -> Vec<Entity> {
         let mut snaffles = self.snaffles();
@@ -648,13 +648,12 @@ impl State {
         })
     }
     fn optimal_goal_location(&self, thrower: &Entity) -> Vector2 {
-        let obstacle_futures: Vec<Entity> =
-            self.obstacles().iter().map(|e| e.future_turns(2).clone()).collect();
-        let points_in_goal: Vec<Vector2> = self.target_goal.points_inside_goal(10);
+        let obstacles: Vec<Entity> = self.obstacles();
+        let points_in_goal: Vec<Vector2> = self.target_goal.points_inside_goal(20);
         let optimal_points: Vec<Vector2> = points_in_goal.iter().filter(|&goal_p| {
             let colliders_in_between = self.in_between_colliders(&thrower.collider.pos, goal_p, 20);
-            // If any point in between is inside any obstacle
-            obstacle_futures.iter().any(|o| {
+            // If any point in between is inside any obstacle, then false
+            !obstacles.iter().any(|o| {
                 colliders_in_between.iter().any(|c| {
                     c.collides(&o.collider)
                 })
