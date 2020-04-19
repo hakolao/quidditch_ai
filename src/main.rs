@@ -398,7 +398,7 @@ impl State {
         }
     }
     fn should_magic(&self, magic_left: &i32) -> bool {
-        let close_to_limit = 1500.0;
+        let close_to_limit = 2500.0;
         // Close to target or own goal
         if *magic_left > 15 &&
             (self.snaffles().iter().any(|s|
@@ -465,14 +465,7 @@ impl State {
             self.optimal_goal_location(target).add(target.collider.vel.negate())
         }
         //Target is closer to wiz1 than wiz1 && wiz1 is closer to goal => pass to wiz1
-        else if !self.is_obstacles_in_between(&target.collider.pos, &wiz1.collider.pos) &&
-            wiz1_dist < wiz2_dist && wiz1_is_ahead {
-            wiz1.collider.pos.add(target.collider.vel.negate())
-            //Second wizard is closer to target && closer to goal than target
-        } else if !self.is_obstacles_in_between(&target.collider.pos, &wiz2.collider.pos) &&
-            wiz2_dist < wiz1_dist && wiz2_is_ahead {
-            wiz2.collider.pos.add(target.collider.vel.negate())
-        } else {
+        else {
             self.open_destination_ahead(target)
         }
     }
