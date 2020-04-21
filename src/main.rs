@@ -50,7 +50,7 @@ static HEIGHT: i32 = 7501;
 static MAX_THRUST: i32 = 150;
 static MAX_POWER: i32 = 500;
 static MAX_MAGIC: i32 = 100;
-static LOOKAHEAD: i32 = 4;
+static LOOKAHEAD: i32 = 3;
 
 #[derive(Debug, Clone, Copy, PartialOrd, PartialEq)]
 struct Vector2 {
